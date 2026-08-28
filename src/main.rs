@@ -4,6 +4,7 @@ mod deck;
 mod herdr;
 mod rt;
 mod run;
+mod state;
 mod cmd {
     pub mod open_viewer;
 }
