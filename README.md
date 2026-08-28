@@ -65,3 +65,15 @@ herdr's lowercase letters are mostly taken by its own defaults, so shifted
 letters (`prefix+B`, not `prefix+b`) avoid collisions; pick whatever is free in
 your config. `sign-in`, `sign-out`, and `open-viewer` can be bound the same way
 if you want them on a key rather than run from the command palette.
+
+### Unread badge
+
+Independent of this plugin: the `rt` daemon itself reports a `chat_unread`
+token on a signed-in pane via `pane.report_metadata` whenever a message fails
+to deliver straight into that pane's inbox. It shows up in herdr's sidebar
+only once your sidebar's agents format references it, e.g.:
+
+```toml
+[sidebar]
+agents_format = "{title} {agent_status} $chat_unread"
+```
