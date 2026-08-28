@@ -190,30 +190,31 @@ width = "60%"
 height = "70%"
 command = ["target/release/herdr-chat", "peek", "--pane"]
 
-[[keys.command]]
-key = "prefix+b"
-type = "plugin_action"
-command = "mattstack.chat.broadcast"
-description = "broadcast to panes"
-
-[[keys.command]]
-key = "prefix+c"
-type = "plugin_action"
-command = "mattstack.chat.peek"
-description = "chat peek"
+[[panes]]
+id = "signin-ask"
+title = "Sign into chat?"
+placement = "popup"
+width = "50%"
+height = 12
+command = ["target/release/herdr-chat", "signin-ask", "--pane"]
 ```
 
-Exact keys, placements, dimensions, and `contexts` values are provisional:
-tuned during implementation against herdr's feel and validated against herdr's
-manifest schema (in particular whether a `"pane"` context exists or the
-pane-scoped actions read the focused pane from `HERDR_PLUGIN_CONTEXT_JSON`
-instead). A keybinding binds to an action; an interactive action opens its
-popup pane by calling `herdr plugin pane open --entrypoint <id>`, so the
-`[[actions]]` and their `[[panes]]` entrypoints are two halves of one flow, and
-the exact split is settled at build time. `min_herdr_version`
-is pinned to the version whose event names and popup fields the plugin uses
-(`pane.agent_detected` and popup `width`/`height`), confirmed against the
-installed herdr at build time.
+Placements and dimensions are provisional, tuned during implementation against
+herdr's feel. Two schema facts pin the rest down. First, **keybindings are not
+a manifest capability**: herdr's plugin manifest accepts only `build`,
+`startup`, `actions`, `events`, `panes`, and `link_handlers`, so no `prefix+b`
+/ `prefix+c` bindings appear in the sketch above. They install into the user's
+herdr keys config (a `[[keys.command]]` of type `plugin_action` naming
+`mattstack.chat.broadcast` and `mattstack.chat.peek`), documented as an install
+step in the README; the manifest parser ignores unknown fields silently, so a
+binding left in the manifest would do nothing at all. Second, an interactive
+action is a command that opens its own popup by calling
+`herdr plugin pane open --plugin mattstack.chat --entrypoint <id>`, so each
+`[[actions]]` entry and its `[[panes]]` entrypoint are two halves of one flow.
+`contexts = ["pane"]` on the sign actions is a real context value.
+`min_herdr_version` is pinned to the version whose event names and popup fields
+the plugin uses (`pane.agent_detected`, popup `width`/`height`), confirmed
+against the installed herdr at build time.
 
 ### The binary and its subcommands
 
@@ -223,15 +224,23 @@ subcommands draw a ratatui popup; the rest are argv glue with no UI.
 - **`on-agent-detected`** (event hook, no UI). Reads the pane id from
   `HERDR_PLUGIN_EVENT_JSON`, derives the repo from the pane's cwd, looks up the
   per-repo preference in state. `never`: exit. `always`: inject `/chat:sign-in`
-  into that pane. `ask`: open a small popup (sign this pane in? yes / always /
-  never / skip); yes or always injects, always/never persist the choice for the
-  repo. Injection reuses `rt pane send` with the slash command as its text, so
-  delivery semantics match invite exactly.
+  into that pane via `rt pane send`, so delivery semantics match invite exactly.
+  `ask`: append the pane to a pending-panes file under `HERDR_PLUGIN_STATE_DIR`
+  and open the `signin-ask` popup. The handoff is a file because a popup process
+  receives no `HERDR_PANE_ID` and `plugin pane open` passes it no arguments. The
+  popup drains every pending pane and asks about them together (yes / always /
+  never / skip); `always` and `never` persist the choice for the repo. A fleet
+  spawn detects many agents at once and a popup is a session-modal singleton, so
+  a second `on-agent-detected` whose `plugin pane open` returns `ui_busy` simply
+  leaves its pane in the pending file for the open popup to drain... detections
+  coalesce into one prompt rather than stacking.
 - **`sign-in` / `sign-out`** (pane-context actions, no UI). Inject
   `/chat:sign-in` or the sign-out command into the focused pane
-  (`HERDR_PANE_ID` from context). Only the agent can arm its own tail, so the
-  plugin injects the command rather than signing in on the agent's behalf, the
-  same rule the invite design established.
+  (`HERDR_PANE_ID` from context), scrubbing `HERDR_PANE_ID` from the `rt`
+  subprocess first (see `rt pane send` below: the self-refusal is an agent-side
+  guard and must not block a deliberate self-target). Only the agent can arm its
+  own tail, so the plugin injects the command rather than signing in on the
+  agent's behalf, the same rule the invite design established.
 - **`broadcast`** (popup). Fetches `rt pane list --json`, renders the picker
   (grouped by repo, text filter, select-all-online), takes a multi-line
   message, and on send runs `rt pane send` per selected pane, sequentially.
@@ -247,18 +256,22 @@ subcommands draw a ratatui popup; the rest are argv glue with no UI.
   `open <url>`. An optional room argument deep-links to `/r/<room>`.
 - **jump-to-pane** is not a top-level action; it is a row action inside `peek`
   and the broadcast picker. It maps a chat handle to a pane through presence
-  (`rt pane list` already carries `presence.handle` and `paneId`) and calls
-  herdr to focus it.
+  (`rt pane list` already carries `presence.handle` and `paneId`) and focuses
+  it. herdr has no focus-by-id verb (`pane focus` is directional), so the plugin
+  resolves the pane's tab and workspace from a herdr snapshot, focuses that
+  workspace and tab, and zooms the pane by id (`pane zoom <paneId>`).
 
 ### Resolving the viewer URL (deck)
 
 deck runs an HTTP API on loopback; its port is written to
 `~/.mattstack/deck/api.json`. The plugin reads that port, then
 `GET http://127.0.0.1:<port>/api/v1/apps/chat` and takes `.row.url`
-(`https://chat.mattstack`). `.row.publicUrl` (the tunnel) is used only if the
-human asks for the shareable URL. If deck is unreachable or the record is
-missing, fall back to the `chat.viewerUrl` setting; if both fail, report it and
-do nothing. No hardcoded URL.
+(`https://chat.mattstack`). `.row.publicUrl` (the tunnel) is offered only for an
+explicit shareable-URL request and only when `.row.published` is true: deck
+populates `publicUrl` even for an unpublished app, and chat is intentionally
+unpublished, so the publish flag is the gate, not whether `publicUrl` is set. If
+deck is unreachable or the record is missing, fall back to the `chat.viewerUrl`
+setting; if both fail, report it and do nothing. No hardcoded URL.
 
 Optional side-quest in the deck repo: a `deck url <service>` verb, since deck's
 CLI `status`/`list` print no URL and have no `--json`. It would give the plugin
@@ -294,7 +307,13 @@ room. It is the general form of `chat:invite`'s injection:
   `agent.prompt` with a short wait, one Enter nudge on a stall, then queued.
 - Result `{ paneId, delivered: "accepted" | "queued" | "refused", reason? }`,
   the same shape `chatInvite()` returns.
-- The herdr gate and the caller's-own-pane refusal are inherited unchanged.
+- The herdr gate is inherited unchanged. The caller's-own-pane refusal is too
+  (`rt` forwards `HERDR_PANE_ID` as `callerPane` and the daemon refuses a
+  match), but it is an agent-side guard against a pane inviting itself. The
+  plugin's deliberate pane-targeting subcommands (`sign-in`, `sign-out`, and
+  `on-agent-detected`'s `always`) scrub `HERDR_PANE_ID` from the `rt` subprocess
+  env so a legitimate self-target is not refused; the popups never carry
+  `HERDR_PANE_ID`, so broadcast is unaffected.
 
 The injection core (`agent.get`, the blocked/working/nudge logic) is extracted
 into one helper that both `chat:invite` and `pane:send` call, so there is a
@@ -371,7 +390,7 @@ Every popup carries a herdr-style footer of keyhints and closes on Escape.
 | herdr theme cannot be read | The popups use the fallback palette; a one-line note, no crash. |
 | `pane.agent_detected` for a non-Claude pane | herdr only fires agent detection for agents; a pane whose agent is not Claude is left alone by `on-agent-detected`. |
 | Repo has no key (detached cwd) | Prompt-on-start defaults to `ask` and does not persist a pref it cannot key. |
-| deck `publicUrl` requested but app not published | `publicUrl` is null; report that the viewer is local-only, open `row.url` instead. |
+| Shareable (public) URL requested for chat | deck populates `publicUrl` even while `published` is false, so the shareable path gates on `row.published`; chat is intentionally unpublished, so it warns and opens the local `row.url` instead. |
 
 ## Testing
 
@@ -418,9 +437,10 @@ Every popup carries a herdr-style footer of keyhints and closes on Escape.
 
 ## What this changes elsewhere
 
-- **The invite design's web-viewer broadcast is superseded.** Broadcast was
-  briefly sketched as a viewer modal; it moves here, where the panes are. The
-  viewer keeps rooms and invite.
+- **Broadcast's home is here, not the viewer.** A brainstorm-stage sketch put
+  broadcast in the web viewer as a modal (it is not in the invite spec); this
+  design places it in herdr, where the panes are. The viewer keeps rooms and
+  invite.
 - **rt gains `rt pane send`** next to `pane list` / `peek` / `spawn`, and
   `chat:invite` is refactored to share its injection helper. `rt:chat`'s verb
   table gains `rt pane send`.
