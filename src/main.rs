@@ -8,6 +8,7 @@ mod state;
 mod theme;
 mod ui;
 mod cmd {
+    pub mod broadcast;
     pub mod detect;
     pub mod open_viewer;
     pub mod picker;
@@ -29,6 +30,12 @@ enum Cmd {
         #[arg(long)]
         room: Option<String>,
     },
+    /// Broadcast a message to picked panes. The workspace action opens the
+    /// popup; `--pane` is the popup entrypoint that runs the TUI.
+    Broadcast {
+        #[arg(long)]
+        pane: bool,
+    },
     /// Sign in to chat.
     SignIn,
     /// Sign out of chat.
@@ -43,6 +50,20 @@ fn main() -> std::process::ExitCode {
     let runner = run::RealRunner;
     match Cli::parse().cmd {
         Cmd::OpenViewer { room } => cmd::open_viewer::run(&runner, room.as_deref()),
+        Cmd::Broadcast { pane } => {
+            let result = if pane {
+                cmd::broadcast::run(&runner)
+            } else {
+                cmd::broadcast::open(&runner)
+            };
+            match result {
+                Ok(_) => std::process::ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("broadcast: {e}");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
         Cmd::SignIn => match cmd::sign::run(&runner) {
             Ok(_) => std::process::ExitCode::SUCCESS,
             Err(e) => {

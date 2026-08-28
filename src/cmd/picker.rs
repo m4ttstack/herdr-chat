@@ -34,10 +34,23 @@ pub struct PickerModel {
 
 impl PickerModel {
     pub fn new(panes: Vec<rt::ChatPane>) -> Self {
+        Self::with_selection(panes, &[])
+    }
+
+    /// Like [`new`](Self::new) but with an initial chosen set. Preselected ids
+    /// absent from `panes` are dropped, so re-opening a past broadcast preselects
+    /// only the panes still present.
+    pub fn with_selection(panes: Vec<rt::ChatPane>, preselect: &[String]) -> Self {
+        let present: HashSet<&str> = panes.iter().map(|p| p.pane_id.as_str()).collect();
+        let chosen = preselect
+            .iter()
+            .filter(|id| present.contains(id.as_str()))
+            .cloned()
+            .collect();
         Self {
             panes,
             filter: String::new(),
-            chosen: HashSet::new(),
+            chosen,
             cursor: 0,
         }
     }
@@ -80,14 +93,19 @@ impl PickerModel {
         self.clamp_cursor();
     }
 
-    /// Select every pane whose presence is `live` (leaving idle/deaf/offline/
-    /// absent and not-signed-in panes untouched). Additive to prior toggles.
+    /// Select the live panes visible under the current filter (leaving idle/deaf/
+    /// offline/absent and not-signed-in panes untouched). Filter-scoped so `a`
+    /// never reaches an online pane the filter has hidden from view, which for a
+    /// state-changing broadcast would be a footgun. Additive to prior toggles.
     pub fn select_all_online(&mut self) {
-        for p in &self.panes {
-            if p.presence.as_ref().is_some_and(|pr| pr.status == "live") {
-                self.chosen.insert(p.pane_id.clone());
-            }
-        }
+        let ids: Vec<String> = self
+            .panes
+            .iter()
+            .filter(|p| self.matches(p))
+            .filter(|p| p.presence.as_ref().is_some_and(|pr| pr.status == "live"))
+            .map(|p| p.pane_id.clone())
+            .collect();
+        self.chosen.extend(ids);
     }
 
     pub fn toggle(&mut self, pane_id: &str) {
@@ -166,7 +184,17 @@ impl PickerModel {
 /// Run the picker popup to completion. Returns the chosen pane ids on Enter, or
 /// `None` on Esc (cancel).
 pub fn pick(theme: &AppTheme, panes: Vec<rt::ChatPane>) -> io::Result<Option<Vec<String>>> {
-    let mut model = PickerModel::new(panes);
+    pick_preselected(theme, panes, &[])
+}
+
+/// Like [`pick`] but starting with `preselect` already chosen (panes still
+/// present). Broadcast's "re-open a recent" flow uses this.
+pub fn pick_preselected(
+    theme: &AppTheme,
+    panes: Vec<rt::ChatPane>,
+    preselect: &[String],
+) -> io::Result<Option<Vec<String>>> {
+    let mut model = PickerModel::with_selection(panes, preselect);
     let mut filter = String::new();
     let mut filtering = false;
     let mut scroll = 0usize;
@@ -523,6 +551,27 @@ mod tests {
         ]);
         m.select_all_online();
         assert_eq!(m.selected(), vec!["w1:p1"]);
+    }
+
+    #[test]
+    fn select_all_online_is_scoped_to_the_current_filter() {
+        // With a filter set, `a` must select only the live panes still visible,
+        // never online panes the filter has hidden (a footgun for a broadcast).
+        let mut m = PickerModel::new(vec![
+            pane("w1:p1", "chat", "meg"),
+            pane("w1:p2", "rt", "fred"),
+        ]);
+        m.set_filter("meg");
+        m.select_all_online();
+        assert_eq!(m.selected(), vec!["w1:p1"]);
+
+        // With no filter, every live pane is fair game (prior behavior).
+        let mut all = PickerModel::new(vec![
+            pane("w1:p1", "chat", "meg"),
+            pane("w1:p2", "rt", "fred"),
+        ]);
+        all.select_all_online();
+        assert_eq!(all.selected(), vec!["w1:p1", "w1:p2"]);
     }
 
     #[test]

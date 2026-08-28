@@ -89,6 +89,23 @@ fn run_json<T: serde::de::DeserializeOwned>(
     serde_json::from_str(&out.stdout).map_err(|e| e.to_string())
 }
 
+/// Like [`run_json`] but feeds `stdin` to the child. Used to deliver a body rt's
+/// `--text` parser would misread from argv (see [`pane_send`]).
+fn run_json_stdin<T: serde::de::DeserializeOwned>(
+    r: &dyn Runner,
+    argv: &[&str],
+    env: &[(&str, Option<&str>)],
+    stdin: &str,
+) -> Result<T, String> {
+    let out = r
+        .run_with_stdin(argv, env, stdin)
+        .map_err(|e| e.to_string())?;
+    if out.status != 0 {
+        return Err(err_text(&out));
+    }
+    serde_json::from_str(&out.stdout).map_err(|e| e.to_string())
+}
+
 /// Run `argv` for its exit status alone, discarding stdout.
 fn run_ok(r: &dyn Runner, argv: &[&str]) -> Result<(), String> {
     let out = r.run(argv, &[]).map_err(|e| e.to_string())?;
@@ -145,11 +162,24 @@ pub fn pane_send(
     } else {
         &[]
     };
-    run_json(
-        r,
-        &[rt.as_str(), "pane", "send", pane, "--text", text, "--json"],
-        env,
-    )
+    // rt's `--text` reads the next token verbatim, but the exact value `-` means
+    // "read the body from stdin". So a leading-dash body (a bare `-`, `-n`,
+    // `--foo`) rides stdin under the `--text -` sentinel and is delivered
+    // literally; every other body (newlines included) goes as a single argv arg.
+    if text.starts_with('-') {
+        run_json_stdin(
+            r,
+            &[rt.as_str(), "pane", "send", pane, "--text", "-", "--json"],
+            env,
+            text,
+        )
+    } else {
+        run_json(
+            r,
+            &[rt.as_str(), "pane", "send", pane, "--text", text, "--json"],
+            env,
+        )
+    }
 }
 
 pub fn post(r: &dyn Runner, room: &str, body: &str) -> Result<(), String> {
@@ -171,6 +201,7 @@ mod tests {
     struct Call {
         argv: Vec<String>,
         env: Vec<(String, Option<String>)>,
+        stdin: Option<String>,
     }
 
     /// Fake [`Runner`] that maps an argv-prefix to canned stdout and records
@@ -207,17 +238,19 @@ mod tests {
                 .cloned()
                 .expect("no call recorded")
         }
-    }
 
-    impl Runner for FakeRunner {
-        fn run(&self, argv: &[&str], env: &[(&str, Option<&str>)]) -> std::io::Result<Output> {
+        fn record(&self, argv: &[&str], env: &[(&str, Option<&str>)], stdin: Option<String>) {
             self.calls.lock().unwrap().push(Call {
                 argv: argv.iter().map(|s| s.to_string()).collect(),
                 env: env
                     .iter()
                     .map(|(k, v)| (k.to_string(), v.map(|s| s.to_string())))
                     .collect(),
+                stdin,
             });
+        }
+
+        fn body_for(&self, argv: &[&str]) -> Output {
             let joined = argv[1..].join(" ");
             let body = self
                 .rules
@@ -226,17 +259,34 @@ mod tests {
                 .map(|(_, b)| b.clone())
                 .or_else(|| self.fallback.clone());
             match body {
-                Some(stdout) => Ok(Output {
+                Some(stdout) => Output {
                     status: 0,
                     stdout,
                     stderr: String::new(),
-                }),
-                None => Ok(Output {
+                },
+                None => Output {
                     status: 1,
                     stdout: String::new(),
                     stderr: "no matching fake rule".to_string(),
-                }),
+                },
             }
+        }
+    }
+
+    impl Runner for FakeRunner {
+        fn run(&self, argv: &[&str], env: &[(&str, Option<&str>)]) -> std::io::Result<Output> {
+            self.record(argv, env, None);
+            Ok(self.body_for(argv))
+        }
+
+        fn run_with_stdin(
+            &self,
+            argv: &[&str],
+            env: &[(&str, Option<&str>)],
+            stdin: &str,
+        ) -> std::io::Result<Output> {
+            self.record(argv, env, Some(stdin.to_string()));
+            Ok(self.body_for(argv))
         }
     }
 
@@ -274,6 +324,32 @@ mod tests {
         let out = pane_send(&r, "w1:p2", "line one\nline two", false).unwrap();
         assert_eq!(out.delivered, "queued");
         assert_eq!(r.last().argv[5], "line one\nline two");
+    }
+
+    #[test]
+    fn pane_send_routes_a_leading_dash_message_through_stdin() {
+        // A body starting with `-` must not be handed to `--text` as an argv
+        // token: it rides stdin under the `--text -` sentinel and is delivered
+        // verbatim.
+        let r = FakeRunner::capture(r#"{"ok":true,"paneId":"w1:p2","delivered":"accepted"}"#);
+        let out = pane_send(&r, "w1:p2", "-rf everything", false).unwrap();
+        assert_eq!(out.delivered, "accepted");
+        let call = r.last();
+        assert_eq!(
+            call.argv,
+            vec!["rt", "pane", "send", "w1:p2", "--text", "-", "--json"]
+        );
+        assert_eq!(call.stdin.as_deref(), Some("-rf everything"));
+    }
+
+    #[test]
+    fn pane_send_routes_a_bare_dash_message_through_stdin() {
+        let r = FakeRunner::capture(r#"{"ok":true,"paneId":"w1:p2","delivered":"queued"}"#);
+        pane_send(&r, "w1:p2", "-", false).unwrap();
+        let call = r.last();
+        // The sentinel sits in argv; the literal `-` body rides stdin.
+        assert_eq!(call.argv[5], "-");
+        assert_eq!(call.stdin.as_deref(), Some("-"));
     }
 
     #[test]

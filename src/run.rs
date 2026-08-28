@@ -1,4 +1,5 @@
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 /// The captured result of running a subprocess.
 pub struct Output {
@@ -16,30 +17,73 @@ pub trait Runner: Send + Sync {
     /// environment. In each `env` entry, `Some(v)` sets the var and `None`
     /// UNSETS it (the `HERDR_PANE_ID` scrub later subcommands rely on).
     fn run(&self, argv: &[&str], env: &[(&str, Option<&str>)]) -> std::io::Result<Output>;
+
+    /// Run `argv` while writing `stdin` to the child's standard input, closing it
+    /// at EOF before waiting. The default drops `stdin` and forwards to [`run`];
+    /// `RealRunner` overrides it to pipe the body in. Used to deliver a broadcast
+    /// body that rt's `--text` parser would otherwise misread (a bare `-` means
+    /// "read stdin", so any leading-dash body rides stdin instead of argv).
+    fn run_with_stdin(
+        &self,
+        argv: &[&str],
+        env: &[(&str, Option<&str>)],
+        stdin: &str,
+    ) -> std::io::Result<Output> {
+        let _ = stdin;
+        self.run(argv, env)
+    }
 }
 
 pub struct RealRunner;
 
-impl Runner for RealRunner {
-    fn run(&self, argv: &[&str], env: &[(&str, Option<&str>)]) -> std::io::Result<Output> {
-        let mut cmd = Command::new(argv[0]);
-        cmd.args(&argv[1..]);
-        for (key, val) in env {
-            match val {
-                Some(v) => {
-                    cmd.env(key, v);
-                }
-                None => {
-                    cmd.env_remove(key);
-                }
+/// The command for `argv` with the env overlay applied (`Some` sets, `None`
+/// unsets). Shared by [`RealRunner::run`] and [`RealRunner::run_with_stdin`].
+fn base_command(argv: &[&str], env: &[(&str, Option<&str>)]) -> Command {
+    let mut cmd = Command::new(argv[0]);
+    cmd.args(&argv[1..]);
+    for (key, val) in env {
+        match val {
+            Some(v) => {
+                cmd.env(key, v);
+            }
+            None => {
+                cmd.env_remove(key);
             }
         }
-        let out = cmd.output()?;
-        Ok(Output {
-            status: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        })
+    }
+    cmd
+}
+
+fn to_output(out: std::process::Output) -> Output {
+    Output {
+        status: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+impl Runner for RealRunner {
+    fn run(&self, argv: &[&str], env: &[(&str, Option<&str>)]) -> std::io::Result<Output> {
+        Ok(to_output(base_command(argv, env).output()?))
+    }
+
+    fn run_with_stdin(
+        &self,
+        argv: &[&str],
+        env: &[(&str, Option<&str>)],
+        stdin: &str,
+    ) -> std::io::Result<Output> {
+        let mut child = base_command(argv, env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        // Drop the write handle after writing so the child sees EOF and does not
+        // hang waiting for more input before we collect its output.
+        if let Some(mut pipe) = child.stdin.take() {
+            pipe.write_all(stdin.as_bytes())?;
+        }
+        Ok(to_output(child.wait_with_output()?))
     }
 }
 
@@ -95,6 +139,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(scrubbed.stdout, "");
+    }
+
+    #[test]
+    fn run_with_stdin_pipes_the_body_verbatim() {
+        // `cat` echoes stdin unchanged, so a leading-dash, multi-line body must
+        // come back byte-for-byte through the pipe.
+        let r = RealRunner;
+        let out = r
+            .run_with_stdin(&["/bin/cat"], &[], "-rf\nsecond line")
+            .unwrap();
+        assert_eq!(out.status, 0);
+        assert_eq!(out.stdout, "-rf\nsecond line");
     }
 
     #[test]

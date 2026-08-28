@@ -15,6 +15,12 @@ contexts = ["workspace"]
 command = ["target/release/herdr-chat", "open-viewer"]
 
 [[actions]]
+id = "broadcast"
+title = "Broadcast to panes"
+contexts = ["workspace"]
+command = ["target/release/herdr-chat", "broadcast"]
+
+[[actions]]
 id = "sign-in"
 title = "Sign in to chat"
 contexts = ["pane"]
@@ -29,6 +35,14 @@ command = ["target/release/herdr-chat", "sign-out"]
 [[events]]
 on = "pane.agent_detected"
 command = ["target/release/herdr-chat", "on-agent-detected"]
+
+[[panes]]
+id = "broadcast-ui"
+title = "Broadcast"
+placement = "popup"
+width = "70%"
+height = "60%"
+command = ["target/release/herdr-chat", "broadcast", "--pane"]
 
 [[panes]]
 id = "signin-ask"
