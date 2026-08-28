@@ -81,7 +81,13 @@ impl Runner for RealRunner {
         // Drop the write handle after writing so the child sees EOF and does not
         // hang waiting for more input before we collect its output.
         if let Some(mut pipe) = child.stdin.take() {
-            pipe.write_all(stdin.as_bytes())?;
+            if let Err(e) = pipe.write_all(stdin.as_bytes()) {
+                // Close stdin and reap the child before returning, so a write
+                // failure cannot leave a zombie or deadlock on a full pipe.
+                drop(pipe);
+                let _ = child.wait_with_output();
+                return Err(e);
+            }
         }
         Ok(to_output(child.wait_with_output()?))
     }

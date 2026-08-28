@@ -70,7 +70,13 @@ fn fetch_row_url_via_api() -> Option<String> {
         .get("port")?
         .as_u64()?;
     let url = format!("http://127.0.0.1:{port}/api/v1/apps/chat");
-    let body = ureq::get(&url).call().ok()?.into_string().ok()?;
+    // Explicit connect + read timeouts so a stalled deck returns promptly and the
+    // `chat.viewerUrl` fallback stays reachable instead of hanging open-viewer.
+    let agent = ureq::builder()
+        .timeout_connect(std::time::Duration::from_secs(3))
+        .timeout_read(std::time::Duration::from_secs(3))
+        .build();
+    let body = agent.get(&url).call().ok()?.into_string().ok()?;
     row_url_from_json(&body)
 }
 

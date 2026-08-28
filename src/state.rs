@@ -1,8 +1,36 @@
 #![allow(dead_code)]
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Write `bytes` to `path` atomically: write a sibling temp file, then rename it
+/// over `path`. A same-directory rename is atomic, so a concurrent reader never
+/// sees a half-written file and a crash mid-write cannot truncate the existing
+/// one. The temp name carries the pid so two processes writing the same file do
+/// not collide on the scratch file.
+fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path)
+}
+
+/// Take an exclusive advisory lock on `<dir>/pending.lock`, held until the
+/// returned handle drops. Serializes the read-modify-write in [`push_pending`]
+/// and [`drain_pending`] so concurrent `on-agent-detected` processes during a
+/// fleet spawn cannot clobber each other's queued panes.
+fn lock_pending(dir: &Path) -> std::io::Result<fs::File> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("pending.lock"))?;
+    file.lock_exclusive()?;
+    Ok(file)
+}
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
 pub enum SigninPref {
@@ -56,10 +84,12 @@ pub fn set_pref(dir: &Path, repo: &str, pref: SigninPref) -> std::io::Result<()>
     };
     prefs.insert(repo.to_string(), pref);
     let json = serde_json::to_string(&prefs)?;
-    fs::write(&pref_file, json)
+    atomic_write(&pref_file, json.as_bytes())
 }
 
 pub fn push_pending(dir: &Path, pane_id: &str) -> std::io::Result<()> {
+    // Serialize the read-modify-write against a racing drain or push.
+    let _guard = lock_pending(dir)?;
     let pending_file = dir.join("pending.json");
     let mut pending = if let Ok(content) = fs::read_to_string(&pending_file) {
         serde_json::from_str::<Vec<String>>(&content).unwrap_or_default()
@@ -68,10 +98,12 @@ pub fn push_pending(dir: &Path, pane_id: &str) -> std::io::Result<()> {
     };
     pending.push(pane_id.to_string());
     let json = serde_json::to_string(&pending)?;
-    fs::write(&pending_file, json)
+    atomic_write(&pending_file, json.as_bytes())
 }
 
 pub fn drain_pending(dir: &Path) -> std::io::Result<Vec<String>> {
+    // Serialize the read-then-remove against a racing push.
+    let _guard = lock_pending(dir)?;
     let pending_file = dir.join("pending.json");
     let pending = if let Ok(content) = fs::read_to_string(&pending_file) {
         serde_json::from_str::<Vec<String>>(&content).unwrap_or_default()
@@ -96,7 +128,7 @@ pub fn push_broadcast(dir: &Path, b: &Broadcast) -> std::io::Result<()> {
         broadcasts.remove(0);
     }
     let json = serde_json::to_string(&broadcasts)?;
-    fs::write(&broadcasts_file, json)
+    atomic_write(&broadcasts_file, json.as_bytes())
 }
 
 pub fn recent_broadcasts(dir: &Path) -> Vec<Broadcast> {
@@ -130,6 +162,37 @@ mod tests {
         push_pending(d.path(), "w1:p2").unwrap();
         assert_eq!(drain_pending(d.path()).unwrap(), vec!["w1:p1", "w1:p2"]);
         assert!(drain_pending(d.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_leaves_no_temp() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("x.json");
+        atomic_write(&target, b"first").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "first");
+        // A second write replaces the file in place via temp + rename.
+        atomic_write(&target, b"second").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "second");
+        // The rename consumes the scratch file; none is left behind.
+        let temps: Vec<_> = fs::read_dir(d.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(temps.is_empty(), "temp file left behind: {temps:?}");
+    }
+
+    #[test]
+    fn push_pending_preserves_prior_entries() {
+        let d = tempfile::tempdir().unwrap();
+        push_pending(d.path(), "w1:p1").unwrap();
+        push_pending(d.path(), "w1:p2").unwrap();
+        push_pending(d.path(), "w1:p3").unwrap();
+        // Each push read-modify-writes the file without dropping earlier panes.
+        assert_eq!(
+            drain_pending(d.path()).unwrap(),
+            vec!["w1:p1", "w1:p2", "w1:p3"]
+        );
     }
 
     #[test]

@@ -64,7 +64,13 @@ enum Cmd {
 fn main() -> std::process::ExitCode {
     let runner = run::RealRunner;
     match Cli::parse().cmd {
-        Cmd::OpenViewer { room } => cmd::open_viewer::run(&runner, room.as_deref()),
+        Cmd::OpenViewer { room } => match cmd::open_viewer::run(&runner, room.as_deref()) {
+            Ok(_) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("open-viewer: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        },
         Cmd::Broadcast { pane } => {
             let result = if pane {
                 cmd::broadcast::run(&runner)

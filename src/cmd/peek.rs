@@ -143,10 +143,7 @@ pub fn run(r: &dyn Runner) -> Result<(), String> {
             }
             Ok(())
         }
-        Action::OpenViewer(room) => {
-            let _ = crate::cmd::open_viewer::run(r, Some(&room));
-            Ok(())
-        }
+        Action::OpenViewer(room) => crate::cmd::open_viewer::run(r, Some(&room)),
     }
 }
 

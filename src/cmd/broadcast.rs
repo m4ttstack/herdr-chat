@@ -31,7 +31,8 @@ pub fn open(r: &dyn Runner) -> Result<(), String> {
 pub fn run(r: &dyn Runner) -> Result<(), String> {
     let dir = state::state_dir();
     let theme = theme::load();
-    let panes = rt::pane_list(r).unwrap_or_default();
+    // A daemon-down error must surface as a clear failure, not an empty picker.
+    let panes = rt::pane_list(r)?;
 
     let Some((message, preselect)) = compose(&theme, &dir)? else {
         return Ok(());
@@ -48,7 +49,10 @@ pub fn run(r: &dyn Runner) -> Result<(), String> {
     let results = fan_out(r, &chosen, &message);
     let recipients = recipients(&results, &panes);
     let line = summary(&results);
-    state::push_broadcast(
+    // The messages are already delivered, so a history-persistence failure must
+    // not sink the whole broadcast: surface the results regardless and fold the
+    // failure into the summary as a warning.
+    let warn = state::push_broadcast(
         &dir,
         &Broadcast {
             at: now_unix(),
@@ -56,8 +60,9 @@ pub fn run(r: &dyn Runner) -> Result<(), String> {
             recipients: recipients.clone(),
         },
     )
-    .map_err(|e| e.to_string())?;
-    show_result(&theme, &line, &recipients).map_err(|e| e.to_string())
+    .err()
+    .map(|e| format!("history not saved: {e}"));
+    show_result(&theme, &line, &recipients, warn.as_deref()).map_err(|e| e.to_string())
 }
 
 /// Send `message` to each pane in order, collecting one result per pane. A send
@@ -141,6 +146,10 @@ fn compose(theme: &AppTheme, dir: &Path) -> Result<Option<(String, Vec<String>)>
                     KeyCode::Backspace => {
                         message.pop();
                     }
+                    // Ctrl-C aborts the composer (confirmed stays false).
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        exit = true;
+                    }
                     KeyCode::Char('r')
                         if key.modifiers.contains(KeyModifiers::CONTROL) && !recents.is_empty() =>
                     {
@@ -150,7 +159,15 @@ fn compose(theme: &AppTheme, dir: &Path) -> Result<Option<(String, Vec<String>)>
                     // With no recents to open, ctrl-r is a no-op rather than
                     // falling through to type a literal `r` into the message.
                     KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {}
-                    KeyCode::Char(c) => message.push(c),
+                    KeyCode::Char(c)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        message.push(c);
+                    }
+                    // Any other ctrl/alt-modified char is ignored, not typed.
+                    KeyCode::Char(_) => {}
                     _ => {}
                 },
                 Mode::Recent => match key.code {
@@ -300,10 +317,16 @@ fn compose_footer(theme: &AppTheme, mode: &Mode, recents: &[Broadcast]) -> Parag
     Paragraph::new(line).style(theme.base)
 }
 
-/// The delivery summary and per-recipient rows; closes on any key.
-fn show_result(theme: &AppTheme, line: &str, recipients: &[Recipient]) -> std::io::Result<()> {
+/// The delivery summary and per-recipient rows, plus an optional warning (e.g. a
+/// history-persistence failure); closes on any key.
+fn show_result(
+    theme: &AppTheme,
+    line: &str,
+    recipients: &[Recipient],
+    warn: Option<&str>,
+) -> std::io::Result<()> {
     ui::popup(theme, |frame, key| {
-        draw_result(frame, theme, line, recipients);
+        draw_result(frame, theme, line, recipients, warn);
         if key.is_some() {
             Flow::Exit
         } else {
@@ -312,7 +335,13 @@ fn show_result(theme: &AppTheme, line: &str, recipients: &[Recipient]) -> std::i
     })
 }
 
-fn draw_result(frame: &mut Frame, theme: &AppTheme, line: &str, recipients: &[Recipient]) {
+fn draw_result(
+    frame: &mut Frame,
+    theme: &AppTheme,
+    line: &str,
+    recipients: &[Recipient],
+    warn: Option<&str>,
+) {
     let full = frame.area();
     let w = full.width.saturating_sub(4).clamp(24, 88);
     let h = full.height.saturating_sub(2).max(6);
@@ -337,6 +366,10 @@ fn draw_result(frame: &mut Frame, theme: &AppTheme, line: &str, recipients: &[Re
             Span::styled(format!("{:<10} ", r.delivered), theme.dim),
             Span::styled(who, theme.base),
         ]));
+    }
+    if let Some(w) = warn {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(w.to_string(), theme.accent)));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

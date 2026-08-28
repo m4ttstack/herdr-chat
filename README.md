@@ -20,6 +20,9 @@ Status: **design**. See `docs/superpowers/specs/2026-08-27-herdr-chat-design.md`
 
 ## Install
 
+macOS only: the plugin shells out to `open` and reads deck's local files, so it
+runs on macOS.
+
 ```bash
 herdr plugin install m4ttstack/herdr-chat
 ```

@@ -2,8 +2,8 @@
 //! type one line, sent to the room or as a DM. Two halves of one flow: the
 //! workspace action ([`open`]) opens the `quick-send-ui` popup; the popup
 //! entrypoint ([`run`]) builds the target list, composes, and dispatches the
-//! send after the popup tears down. [`send`] is the pure routing [`peek`]'s
-//! `s` key and the sibling popups reuse.
+//! send after the popup tears down. [`send`] is the pure routing the composer
+//! reuses to deliver one line to a room or a DM.
 
 use crate::herdr;
 use crate::rt;
@@ -11,7 +11,7 @@ use crate::run::Runner;
 use crate::theme::{self, AppTheme};
 use crate::ui::{self, Flow};
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -82,7 +82,19 @@ fn compose(theme: &AppTheme, targets: &[Target]) -> std::io::Result<Option<(Targ
                 KeyCode::Backspace => {
                     line.pop();
                 }
-                KeyCode::Char(c) => line.push(c),
+                // Ctrl-C aborts the composer (result stays None).
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    exit = true;
+                }
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    line.push(c);
+                }
+                // Any other ctrl/alt-modified char is ignored, not typed.
+                KeyCode::Char(_) => {}
                 KeyCode::Enter if !line.is_empty() => {
                     if let Some(t) = targets.get(cursor) {
                         result = Some((t.clone(), line.clone()));

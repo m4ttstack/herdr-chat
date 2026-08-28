@@ -1,31 +1,21 @@
 use crate::deck;
 use crate::run::Runner;
-use std::process::ExitCode;
 
 /// Resolve the chat viewer URL from deck, deep-link to `/r/<room>` when a room
-/// is given, and hand it to `open`.
-pub fn run(runner: &dyn Runner, room: Option<&str>) -> ExitCode {
-    let base = match deck::viewer_url_real(runner) {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("open-viewer: could not resolve the viewer URL: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+/// is given, and hand it to `open`. Errs when the URL cannot be resolved or the
+/// `open` subprocess fails, so a failed open surfaces instead of passing as a
+/// silent success.
+pub fn run(runner: &dyn Runner, room: Option<&str>) -> Result<(), String> {
+    let base = deck::viewer_url_real(runner)
+        .map_err(|e| format!("could not resolve the viewer URL: {e}"))?;
     let url = match room {
         Some(r) => format!("{}/r/{}", base.trim_end_matches('/'), r),
         None => base,
     };
     match runner.run(&["open", url.as_str()], &[]) {
-        Ok(o) if o.status == 0 => ExitCode::SUCCESS,
-        Ok(o) => {
-            eprintln!("open-viewer: open exited {}", o.status);
-            ExitCode::FAILURE
-        }
-        Err(e) => {
-            eprintln!("open-viewer: {e}");
-            ExitCode::FAILURE
-        }
+        Ok(o) if o.status == 0 => Ok(()),
+        Ok(o) => Err(format!("open exited {}", o.status)),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -82,7 +72,7 @@ mod tests {
     #[test]
     fn opens_the_resolved_url() {
         let r = FakeRunner::new();
-        run(&r, None);
+        run(&r, None).unwrap();
         assert_eq!(
             r.open_call(),
             vec!["open".to_string(), "https://chat.mattstack".to_string()]
@@ -92,7 +82,7 @@ mod tests {
     #[test]
     fn appends_the_room_suffix() {
         let r = FakeRunner::new();
-        run(&r, Some("build"));
+        run(&r, Some("build")).unwrap();
         assert_eq!(
             r.open_call(),
             vec![

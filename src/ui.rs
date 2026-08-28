@@ -34,10 +34,15 @@ where
 {
     ratatui::run(|terminal| {
         // Paint once before the first blocking read so the popup is visible at
-        // once rather than after the first key.
+        // once rather than after the first key. Honor an immediate Exit so a
+        // step that closes on its keyless first paint is respected.
+        let mut flow = Flow::Continue;
         terminal.draw(|frame| {
-            paint(frame, theme, &mut step, None);
+            flow = paint(frame, theme, &mut step, None);
         })?;
+        if matches!(flow, Flow::Exit) {
+            return Ok(());
+        }
         loop {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -52,9 +57,13 @@ where
                 // A resize needs a repaint; the next `draw` re-renders at the new
                 // size. Other events (mouse, focus, paste) are ignored.
                 Event::Resize(_, _) => {
+                    let mut flow = Flow::Continue;
                     terminal.draw(|frame| {
-                        paint(frame, theme, &mut step, None);
+                        flow = paint(frame, theme, &mut step, None);
                     })?;
+                    if matches!(flow, Flow::Exit) {
+                        break;
+                    }
                 }
                 _ => {}
             }
