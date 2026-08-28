@@ -25,3 +25,15 @@ id = "sign-out"
 title = "Sign out of chat"
 contexts = ["pane"]
 command = ["target/release/herdr-chat", "sign-out"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["target/release/herdr-chat", "on-agent-detected"]
+
+[[panes]]
+id = "signin-ask"
+title = "Sign in to chat?"
+placement = "popup"
+width = "66"
+height = "11"
+command = ["target/release/herdr-chat", "signin-ask"]

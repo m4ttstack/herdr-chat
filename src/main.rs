@@ -6,9 +6,12 @@ mod rt;
 mod run;
 mod state;
 mod theme;
+mod ui;
 mod cmd {
+    pub mod detect;
     pub mod open_viewer;
     pub mod sign;
+    pub mod signin_ask;
 }
 
 #[derive(Parser)]
@@ -29,6 +32,10 @@ enum Cmd {
     SignIn,
     /// Sign out of chat.
     SignOut,
+    /// Event hook: an agent was detected in a pane (prompt-on-start).
+    OnAgentDetected,
+    /// Popup: ask whether to sign queued panes in to chat.
+    SigninAsk,
 }
 
 fn main() -> std::process::ExitCode {
@@ -50,6 +57,20 @@ fn main() -> std::process::ExitCode {
             Ok(_) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("sign-out: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        },
+        Cmd::OnAgentDetected => match cmd::detect::run(&runner) {
+            Ok(_) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("on-agent-detected: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        },
+        Cmd::SigninAsk => match cmd::signin_ask::run(&runner) {
+            Ok(_) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("signin-ask: {e}");
                 std::process::ExitCode::FAILURE
             }
         },
