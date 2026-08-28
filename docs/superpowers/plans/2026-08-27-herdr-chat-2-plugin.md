@@ -50,7 +50,8 @@ pub fn rt_bin() -> String;           // RT_BIN_PATH else "rt"
 pub fn herdr_bin() -> String;        // HERDR_BIN_PATH else "herdr"
 
 // src/deck.rs
-pub fn viewer_url(get: &dyn Fn(&str) -> Result<String, String>, setting: &dyn Fn() -> Option<String>) -> Result<String, String>;
+pub fn viewer_url(deck: &dyn Fn() -> Result<String, String>, setting: &dyn Fn() -> Option<String>) -> Result<String, String>; // deck returns a resolved URL string; viewer_url does no parsing
+pub fn row_url_from_json(body: &str) -> Option<String>; // pure: pull row.url from an /api/v1/apps/<svc> response body
 ```
 
 - [ ] **Step 1: Scaffold the crate**
@@ -109,32 +110,37 @@ Create `src/run.rs` with `RealRunner` using `std::process::Command`, applying th
 
 - [ ] **Step 3: Write the failing deck test**
 
-In `src/deck.rs`, write the resolver plus tests. The resolver reads `~/.mattstack/deck/api.json` for the port, GETs `/api/v1/apps/chat`, returns `.row.url`; on any failure it falls back to the `chat.viewerUrl` setting; if both fail it errors. Split the IO out behind the two closures so the test drives it:
+In `src/deck.rs`, write the pure `viewer_url` (returns `deck()` if it is `Ok`, else `setting()`, else an error... no IO and no JSON parsing) and the pure `row_url_from_json` parser, plus tests. All IO (running `deck url chat`, reading `api.json`, the HTTP GET) lives in the non-test `viewer_url_real` in Step 4, so the closures keep the tests IO-free:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn prefers_deck_row_url() {
-        let got = viewer_url(&|_| Ok(r#"{"row":{"url":"https://chat.mattstack","published":false}}"#.into()), &|| None);
+    fn prefers_deck_url() {
+        let got = viewer_url(&|| Ok("https://chat.mattstack".into()), &|| None);
         assert_eq!(got.unwrap(), "https://chat.mattstack");
     }
     #[test]
     fn falls_back_to_setting_when_deck_fails() {
-        let got = viewer_url(&|_| Err("no deck".into()), &|| Some("https://chat.mattstack".into()));
+        let got = viewer_url(&|| Err("no deck".into()), &|| Some("https://chat.mattstack".into()));
         assert_eq!(got.unwrap(), "https://chat.mattstack");
     }
     #[test]
     fn errors_when_both_fail() {
-        assert!(viewer_url(&|_| Err("x".into()), &|| None).is_err());
+        assert!(viewer_url(&|| Err("x".into()), &|| None).is_err());
+    }
+    #[test]
+    fn row_url_from_json_pulls_the_field() {
+        assert_eq!(row_url_from_json(r#"{"row":{"url":"https://chat.mattstack","published":false}}"#), Some("https://chat.mattstack".into()));
+        assert_eq!(row_url_from_json(r#"{"error":"unknown app"}"#), None);
     }
 }
 ```
 
 - [ ] **Step 4: Implement `viewer_url` and the real IO wrapper**
 
-`viewer_url` parses the deck JSON with serde, pulls `row.url`. Add a non-test `viewer_url_real()` that supplies the closures: the deck lookup runs `deck url chat` (part 3) first and, if that verb is absent or fails, reads `api.json`'s port then `ureq::get(...).call()` on `/api/v1/apps/chat`; the setting reads `rt settings get chat.viewerUrl` (confirm the exact settings command). Keep `published`/`publicUrl` parsing available for a later shareable-URL path, but open-viewer uses `row.url`.
+`viewer_url` just picks `deck()` else `setting()`; the parsing lives in `row_url_from_json`. Add a non-test `viewer_url_real()` whose `deck` closure runs `deck url chat` (part 3) and returns its trimmed stdout URL, and, if that verb is absent or fails, reads `api.json`'s port, `ureq::get(...).call()`s `/api/v1/apps/chat`, and passes the body through `row_url_from_json`. The `setting` closure runs `rt settings get chat.viewerUrl` (confirm the exact settings command). `published`/`publicUrl` parsing stays available for a later shareable-URL path; open-viewer uses `row.url`.
 
 - [ ] **Step 5: Implement `open-viewer`**
 

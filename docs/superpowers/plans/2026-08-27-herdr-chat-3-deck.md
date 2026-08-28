@@ -38,31 +38,35 @@ Create the CLI test (match deck's harness; sketch):
 
 ```ts
 import { expect, test } from "bun:test";
-import { runCli } from "./test-harness.ts"; // match deck's actual CLI test entry
+// Match deck's CLI test harness (src/cli/commands.test.ts): boot the fake API, seed a
+// record with putRecord, and call runCommand(argv, io) capturing stdout/stderr/exit via io.
+import { withFakeDeck, runCommand } from "./commands.test-harness.ts"; // use deck's actual entry points
 
 test("deck url <service> prints row.url", async () => {
-  const { stdout, code } = await runCli(["url", "chat"], {
-    apps: { chat: { row: { url: "https://chat.mattstack", published: false, publicUrl: "https://chat.m4tthew.dev" } } },
+  await withFakeDeck({ chat: { url: "https://chat.mattstack", published: false, publicUrl: "https://chat.m4tthew.dev" } }, async (io) => {
+    const code = await runCommand(["url", "chat"], io);
+    expect(io.stdout.trim()).toBe("https://chat.mattstack");
+    expect(code).toBe(0);
   });
-  expect(stdout.trim()).toBe("https://chat.mattstack");
-  expect(code).toBe(0);
 });
 
 test("deck url --public errors when the app is not published", async () => {
-  const { stderr, code } = await runCli(["url", "chat", "--public"], {
-    apps: { chat: { row: { url: "https://chat.mattstack", published: false, publicUrl: "https://chat.m4tthew.dev" } } },
+  await withFakeDeck({ chat: { url: "https://chat.mattstack", published: false, publicUrl: "https://chat.m4tthew.dev" } }, async (io) => {
+    const code = await runCommand(["url", "chat", "--public"], io);
+    expect(code).not.toBe(0);
+    expect(io.stderr).toContain("not published");
   });
-  expect(code).not.toBe(0);
-  expect(stderr).toContain("not published");
 });
 
 test("deck url of an unknown service exits non-zero", async () => {
-  const { code } = await runCli(["url", "nope"], { apps: {} });
-  expect(code).not.toBe(0);
+  await withFakeDeck({}, async (io) => {
+    const code = await runCommand(["url", "nope"], io);
+    expect(code).not.toBe(0);
+  });
 });
 ```
 
-(Adapt the harness/mocking to deck's actual pattern: if CLI tests run against a `DECK_FIXTURE` server rather than an injected app map, seed the fixture with the `chat` row instead.)
+(`withFakeDeck` / `runCommand` stand in for deck's real seed-and-run helpers: `src/cli/commands.test.ts` seeds records via `putRecord` and runs the CLI through `runCommand(argv, io)`. Match those exact names and the `io` capture shape.)
 
 - [ ] **Step 2: Run to verify failure**
 

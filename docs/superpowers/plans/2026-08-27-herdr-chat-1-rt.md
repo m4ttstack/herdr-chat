@@ -31,9 +31,9 @@
 Lift the delivery logic out of `chat:invite` so `pane:send` can share it. `chat:invite`'s behavior and its tests must not change.
 
 **Files:**
-- Create: `lib/herdr/inject.ts`
+- Create: `lib/daemon/inject.ts`
 - Modify: `lib/daemon/handlers/chat.ts` (the `chat:invite` handler: replace its inline delivery with a call to the helper)
-- Test: `lib/herdr/__tests__/inject.test.ts`
+- Test: `lib/daemon/__tests__/inject.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -51,14 +51,19 @@ export interface InjectOptions {
 }
 
 /**
- * herdr's injection delivery, shared by chat:invite and pane:send.
- * agent.get first: blocked is refused, working is queued (no wait), else
- * agent.prompt with a wait until working, one Enter nudge on a stall, then queued.
+ * herdr's injection delivery, shared by chat:invite and pane:send. Returns the
+ * CommandResult shape both handlers already return: a refused/accepted/queued
+ * outcome is `{ ok: true, data }`; a herdr-unavailable or unexpected herdr error
+ * is `{ ok: false, error }` (via herdrError), so a caller returns it directly.
+ * agent.get first: not-claude and blocked are refused; working is queued (prompt,
+ * no wait); else agent.prompt with a wait until working, and on a stall (the
+ * prompt fails with `timeout`/`agent_prompt_stalled`) one `pane.send_keys` Enter
+ * nudge then an agent.wait, accepted or queued honestly.
  */
-export function injectIntoPane(opts: InjectOptions): Promise<InjectResult>;
+export function injectIntoPane(opts: InjectOptions): Promise<{ ok: true; data: InjectResult } | { ok: false; error: string }>;
 ```
 
-- Consumes: `herdrRequest`, `herdrError`/`HERDR_UNAVAILABLE` from `lib/herdr/client.ts`.
+- Consumes: `herdrRequest`, `waitTimeout` from `lib/herdr/client.ts`; `herdrError` from `lib/daemon/handlers/pane.ts`. The helper lives in the daemon layer (`lib/daemon/inject.ts`), not `lib/herdr/`, so importing `herdrError` (a sibling daemon-handler export) preserves the one-way `lib/herdr <- lib/daemon` layering the invite plan established.
 
 - [ ] **Step 1: Read the merged `chat:invite` delivery block**
 
@@ -66,12 +71,12 @@ Open `lib/daemon/handlers/chat.ts` and locate the `chat:invite` handler. Identif
 
 - [ ] **Step 2: Write the failing helper tests**
 
-Create `lib/herdr/__tests__/inject.test.ts`, driving the helper against the existing `fakeHerdr` (`lib/herdr/__tests__/fake-herdr.ts`):
+Create `lib/daemon/__tests__/inject.test.ts`, driving the helper against the existing `fakeHerdr` (`lib/herdr/__tests__/fake-herdr.ts`). The wire shapes match invite's `chat:invite` tests exactly: `agent.get` replies `{ type: "agent_info", agent: { agent, agent_status } }` (the handler reads `.agent.agent` and `.agent.agent_status`), a stall is `agent.prompt` *failing* with code `timeout`, and the nudge verb is `pane.send_keys`:
 
 ```ts
 import { afterEach, expect, test } from "bun:test";
-import { herdrRequest } from "../client.ts";
-import { fakeHerdr, HerdrFakeError, type FakeHerdrHandler } from "./fake-herdr.ts";
+import { herdrRequest } from "../../herdr/client.ts";
+import { fakeHerdr, HerdrFakeError, type FakeHerdrHandler } from "../../herdr/__tests__/fake-herdr.ts";
 import { injectIntoPane } from "../inject.ts";
 
 const stops: Array<() => void> = [];
@@ -84,90 +89,151 @@ function on(handler: FakeHerdrHandler) {
   return { seen, herdr };
 }
 
-test("an idle pane accepts: prompt sent, reached working", async () => {
-  const { herdr, seen } = on((method) => {
-    if (method === "agent.get") return { type: "agent", agent: { pane_id: "w1:p1", status: "idle" } };
-    if (method === "agent.prompt") return { type: "agent", agent: { pane_id: "w1:p1", status: "working" } };
+// agent.get's reply, as chat:invite reads it: result.agent.agent (kind) and result.agent.agent_status.
+const agent = (status: string, kind = "claude") => ({ type: "agent_info", agent: { pane_id: "w1:p1", agent: kind, agent_status: status } });
+
+test("an idle pane accepts: prompt sent with a wait, reached working", async () => {
+  const { herdr, seen } = on((method, params) => {
+    if (method === "agent.get") return agent("idle");
+    if (method === "agent.prompt") return { type: "agent_prompted", agent: { ...agent("working").agent, text: params.text } };
     return new HerdrFakeError("invalid_request", method);
   });
   const res = await injectIntoPane({ paneId: "w1:p1", text: "do the thing", herdr });
-  expect(res).toEqual({ paneId: "w1:p1", delivered: "accepted" });
-  expect(seen.map((s) => s.method)).toContain("agent.prompt");
+  expect(res).toEqual({ ok: true, data: { paneId: "w1:p1", delivered: "accepted" } });
+  expect(seen.find((s) => s.method === "agent.prompt")!.params).toEqual({ target: "w1:p1", text: "do the thing", wait: { until: ["working"], timeout_ms: 5000 } });
 });
 
 test("a blocked pane is refused, nothing sent", async () => {
-  const { herdr, seen } = on((method) =>
-    method === "agent.get" ? { type: "agent", agent: { pane_id: "w1:p1", status: "blocked" } } : new HerdrFakeError("invalid_request", method));
+  const { herdr, seen } = on((method) => (method === "agent.get" ? agent("blocked") : new HerdrFakeError("invalid_request", method)));
   const res = await injectIntoPane({ paneId: "w1:p1", text: "hi", herdr });
-  expect(res).toEqual({ paneId: "w1:p1", delivered: "refused", reason: "at a prompt" });
-  expect(seen.map((s) => s.method)).not.toContain("agent.prompt");
+  expect(res).toEqual({ ok: true, data: { paneId: "w1:p1", delivered: "refused", reason: "at a prompt" } });
+  expect(seen.map((s) => s.method)).toEqual(["agent.get"]);
+});
+
+test("a non-claude pane is refused", async () => {
+  const { herdr } = on((method) => (method === "agent.get" ? agent("idle", "codex") : new HerdrFakeError("invalid_request", method)));
+  const res = await injectIntoPane({ paneId: "w1:p1", text: "hi", herdr });
+  expect(res).toEqual({ ok: true, data: { paneId: "w1:p1", delivered: "refused", reason: "not a claude pane" } });
 });
 
 test("a working pane is queued: prompt sent without a wait", async () => {
-  const { herdr } = on((method) => {
-    if (method === "agent.get") return { type: "agent", agent: { pane_id: "w1:p1", status: "working" } };
-    if (method === "agent.prompt") return { type: "agent", agent: { pane_id: "w1:p1", status: "working" } };
+  const { herdr, seen } = on((method) => {
+    if (method === "agent.get") return agent("working");
+    if (method === "agent.prompt") return { type: "agent_prompted", agent: agent("working").agent };
     return new HerdrFakeError("invalid_request", method);
   });
   const res = await injectIntoPane({ paneId: "w1:p1", text: "later", herdr });
-  expect(res).toEqual({ paneId: "w1:p1", delivered: "queued" });
+  expect(res).toEqual({ ok: true, data: { paneId: "w1:p1", delivered: "queued" } });
+  expect(seen.find((s) => s.method === "agent.prompt")!.params).toEqual({ target: "w1:p1", text: "later" });
 });
 
-test("a stall after the prompt gets one Enter nudge, then queued", async () => {
+test("a stalled prompt gets one pane.send_keys Enter nudge, then queued", async () => {
   let prompts = 0;
   const { herdr, seen } = on((method) => {
-    if (method === "agent.get") return { type: "agent", agent: { pane_id: "w1:p1", status: "idle" } };
-    if (method === "agent.prompt") { prompts++; return { type: "agent", agent: { pane_id: "w1:p1", status: "idle" } }; }
-    if (method === "pane.send_input") return { type: "ok" };
+    if (method === "agent.get") return agent("idle");
+    if (method === "agent.prompt") { prompts++; return new HerdrFakeError("timeout", "timed out waiting for agent status"); }
+    if (method === "pane.send_keys") return { type: "ok" };
+    if (method === "agent.wait") return new HerdrFakeError("timeout", "timed out waiting for agent status");
     return new HerdrFakeError("invalid_request", method);
   });
-  const res = await injectIntoPane({ paneId: "w1:p1", text: "x", herdr, promptWaitMs: 20 });
-  expect(res.delivered).toBe("queued");
-  expect(seen.map((s) => s.method)).toContain("pane.send_input");
+  const res = await injectIntoPane({ paneId: "w1:p1", text: "x", herdr });
+  expect(res).toEqual({ ok: true, data: { paneId: "w1:p1", delivered: "queued" } });
   expect(prompts).toBe(1);
+  expect(seen.filter((s) => s.method === "pane.send_keys")).toHaveLength(1);
 });
 
 test("the caller's own pane is refused before any herdr call", async () => {
   const { herdr, seen } = on(() => new HerdrFakeError("invalid_request", "unreachable in this test"));
   const res = await injectIntoPane({ paneId: "w1:p1", text: "x", callerPane: "w1:p1", herdr });
-  expect(res).toEqual({ paneId: "w1:p1", delivered: "refused", reason: "that is this pane" });
+  expect(res).toEqual({ ok: true, data: { paneId: "w1:p1", delivered: "refused", reason: "that is this pane" } });
   expect(seen).toHaveLength(0);
 });
 
 test("multi-line text is delivered verbatim as the prompt", async () => {
   const { herdr, seen } = on((method) =>
-    method === "agent.get" ? { type: "agent", agent: { pane_id: "w1:p1", status: "idle" } }
-    : method === "agent.prompt" ? { type: "agent", agent: { pane_id: "w1:p1", status: "working" } }
+    method === "agent.get" ? agent("idle")
+    : method === "agent.prompt" ? { type: "agent_prompted", agent: agent("working").agent }
     : new HerdrFakeError("invalid_request", method));
   await injectIntoPane({ paneId: "w1:p1", text: "line one\nline two", herdr });
-  const prompt = seen.find((s) => s.method === "agent.prompt")!;
-  expect(prompt.params.text).toBe("line one\nline two");
+  expect(seen.find((s) => s.method === "agent.prompt")!.params.text).toBe("line one\nline two");
+});
+
+test("a missing socket is herdr unavailable (ok:false)", async () => {
+  const herdr: typeof herdrRequest = (m, p, o) => herdrRequest(m, p, { ...o, sockPath: "/tmp/absent-herdr-inject.sock" });
+  const res = await injectIntoPane({ paneId: "w1:p1", text: "x", herdr });
+  expect(res.ok).toBe(false);
+  if (res.ok) throw new Error("unreachable");
+  expect(res.error.startsWith("herdr unavailable")).toBe(true);
 });
 ```
 
 - [ ] **Step 3: Run to verify failure**
 
-Run: `bun test lib/herdr/__tests__/inject.test.ts`
+Run: `bun test lib/daemon/__tests__/inject.test.ts`
 Expected: FAIL, `Cannot find module "../inject.ts"`.
 
-- [ ] **Step 4: Move the logic into `lib/herdr/inject.ts`**
+- [ ] **Step 4: Move the logic into `lib/daemon/inject.ts`**
 
-Create `lib/herdr/inject.ts` with the delivery block cut from `chat:invite`, generalized so the injected string is `opts.text` (not a hardcoded `/chat:join`). Preserve the exact status branching, the `wait` shape, the single `pane.send_input` Enter nudge, and the reason strings (`"at a prompt"`, `"that is this pane"`, `"not a claude pane"` if `chat:invite` checked that). The caller-pane guard runs first, before any herdr call. Use `herdrError` from the client for herdr-unavailable and error passthrough.
+Create `lib/daemon/inject.ts` by generalizing invite's `chat:invite` delivery so the injected string is `opts.text` (not a hardcoded `/chat:join`). Verify the merged `chat:invite` still matches this before copying; the reason strings, the `wait` shape, and the `pane.send_keys` nudge come straight from it:
+
+```ts
+import { herdrRequest, waitTimeout } from "../herdr/client.ts";
+import { herdrError } from "./handlers/pane.ts";
+
+const DEFAULT_WAIT_MS = 5_000;
+
+export type InjectDelivery = "accepted" | "queued" | "refused";
+export interface InjectResult { paneId: string; delivered: InjectDelivery; reason?: string }
+export interface InjectOptions { paneId: string; text: string; callerPane?: string; herdr?: typeof herdrRequest; promptWaitMs?: number }
+
+export async function injectIntoPane(opts: InjectOptions): Promise<{ ok: true; data: InjectResult } | { ok: false; error: string }> {
+  const { paneId, text, callerPane } = opts;
+  const herdr = opts.herdr ?? herdrRequest;
+  const waitMs = opts.promptWaitMs ?? DEFAULT_WAIT_MS;
+  const ok = (delivered: InjectDelivery, reason?: string) =>
+    ({ ok: true as const, data: reason ? { paneId, delivered, reason } : { paneId, delivered } });
+  if (callerPane && callerPane === paneId) return ok("refused", "that is this pane");
+
+  const probe = await herdr<{ agent: { agent: string; agent_status: string } }>("agent.get", { target: paneId });
+  if (!probe.ok) {
+    if (probe.code === "agent_not_found" || probe.code === "agent_target_ambiguous") return ok("refused", "not a claude pane");
+    return herdrError(probe);
+  }
+  if (probe.result.agent.agent !== "claude") return ok("refused", "not a claude pane");
+  if (probe.result.agent.agent_status === "blocked") return ok("refused", "at a prompt");
+
+  if (probe.result.agent.agent_status === "working") {
+    const queued = await herdr("agent.prompt", { target: paneId, text });
+    if (!queued.ok) return queued.code === "agent_blocked" ? ok("refused", "at a prompt") : herdrError(queued);
+    return ok("queued");
+  }
+
+  const prompted = await herdr("agent.prompt", { target: paneId, text, wait: { until: ["working"], timeout_ms: waitMs } }, { timeoutMs: waitTimeout(waitMs) });
+  if (prompted.ok) return ok("accepted");
+  if (prompted.code === "agent_blocked") return ok("refused", "at a prompt");
+  if (prompted.code !== "timeout" && prompted.code !== "agent_prompt_stalled") return herdrError(prompted);
+
+  // The Claude TUI can absorb the bundled Enter into the composer; one nudge, one more wait.
+  await herdr("pane.send_keys", { pane_id: paneId, keys: ["enter"] });
+  const nudged = await herdr("agent.wait", { target: paneId, until: ["working"], timeout_ms: waitMs }, { timeoutMs: waitTimeout(waitMs) });
+  return ok(nudged.ok ? "accepted" : "queued");
+}
+```
 
 - [ ] **Step 5: Re-point `chat:invite` at the helper**
 
-In `lib/daemon/handlers/chat.ts`, delete the moved block and call `injectIntoPane({ paneId, text: joinLine, callerPane, herdr })`, where `joinLine` is the `/chat:join <room> [note ...]` string `chat:invite` already builds. Keep `chat:invite`'s payload, its `from`/note assembly, and its result shape unchanged.
+In `lib/daemon/handlers/chat.ts`, delete the delivery block and call the helper. `chat:invite` keeps its `isValidChatName(room)` / `isValidChatName(from)` guards and its `inviteText(room, from, note)` build, then `return injectIntoPane({ paneId, text: inviteText(room, from, note), callerPane, herdr });`. `chat.ts` now imports `injectIntoPane` from `../inject.ts` and drops its now-unused direct `herdrError` / `waitTimeout` imports (the helper owns those); the `herdr` seam, the `inviteText` export, and every existing `chat:invite` test stay unchanged.
 
 - [ ] **Step 6: Run both suites**
 
-Run: `bun test lib/herdr/__tests__/inject.test.ts lib/daemon/__tests__/chat-handlers.test.ts`
+Run: `bun test lib/daemon/__tests__/inject.test.ts lib/daemon/__tests__/chat-handlers.test.ts`
 Expected: the new inject suite passes and the existing `chat:invite` tests still pass unchanged. If a `chat:invite` test asserted an exact internal call order that the extraction reordered, the delivery is identical; update only the assertion, never the behavior.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add lib/herdr/inject.ts lib/herdr/__tests__/inject.test.ts lib/daemon/handlers/chat.ts
-git commit -m "herdr: extract injectIntoPane, the delivery core shared by chat:invite and pane:send"
+git add lib/daemon/inject.ts lib/daemon/__tests__/inject.test.ts lib/daemon/handlers/chat.ts
+git commit -m "daemon: extract injectIntoPane, the delivery core shared by chat:invite and pane:send"
 ```
 
 ---
@@ -184,7 +250,7 @@ git commit -m "herdr: extract injectIntoPane, the delivery core shared by chat:i
 - Produces (rt-client):
 
 ```ts
-/** Duplicated shape on purpose: mirrors lib/herdr/inject.ts's InjectResult. */
+/** Duplicated shape on purpose: mirrors lib/daemon/inject.ts's InjectResult. */
 export type PaneDelivery = "accepted" | "queued" | "refused";
 export interface PaneSendResult { paneId: string; delivered: PaneDelivery; reason?: string }
   "pane:send": { payload: { paneId: string; text: string; callerPane?: string }; data: PaneSendResult };
@@ -205,9 +271,10 @@ Append to `lib/daemon/__tests__/pane-handlers.test.ts`:
 
 ```ts
 test("pane:send delivers caller text and returns accepted", async () => {
-  const { pane } = harness((method) =>
-    method === "agent.get" ? { type: "agent", agent: { pane_id: "w1:p1", status: "idle" } }
-    : method === "agent.prompt" ? { type: "agent", agent: { pane_id: "w1:p1", status: "working" } }
+  const claude = (status: string) => ({ type: "agent_info", agent: { pane_id: "w1:p1", agent: "claude", agent_status: status } });
+  const { pane } = harness((method, params) =>
+    method === "agent.get" ? claude("idle")
+    : method === "agent.prompt" ? { type: "agent_prompted", agent: { ...claude("working").agent, text: params.text } }
     : new HerdrFakeError("invalid_request", method));
   const res = await pane["pane:send"]({ paneId: "w1:p1", text: "broadcast: standup in 5" });
   expect(res).toEqual({ ok: true, data: { paneId: "w1:p1", delivered: "accepted" } });
@@ -237,21 +304,14 @@ Expected: FAIL, `pane["pane:send"] is not a function`.
 
 - [ ] **Step 4: Implement the handler**
 
-In `lib/daemon/handlers/pane.ts`: import `injectIntoPane` from `../../herdr/inject.ts`, widen the factory's return type to include `"pane:send"`, and add:
+In `lib/daemon/handlers/pane.ts`: import `injectIntoPane` from `../inject.ts`, widen the factory's return type to include `"pane:send"`, and add:
 
 ```ts
-    "pane:send": async (payload: Commands["pane:send"]["payload"]): Promise<CommandResult<"pane:send">> => {
-      const result = await injectIntoPane({
-        paneId: payload.paneId,
-        text: payload.text,
-        callerPane: payload.callerPane,
-        herdr,
-      });
-      return { ok: true, data: result };
-    },
+    "pane:send": async (payload: Commands["pane:send"]["payload"]): Promise<CommandResult<"pane:send">> =>
+      injectIntoPane({ paneId: payload.paneId, text: payload.text, callerPane: payload.callerPane, herdr }),
 ```
 
-`injectIntoPane` maps a missing socket to a `herdr unavailable` throw-free result; if the invite implementation returns herdr-unavailable as an `InjectResult` rather than an error, mirror `chat:invite`'s choice here so the two verbs agree. (Check how `chat:invite` surfaces herdr-unavailable and match it exactly.)
+`injectIntoPane` already returns the `CommandResult` shape (`{ ok: true, data }` for a refused/accepted/queued outcome, `{ ok: false, error }` via `herdrError` for a missing socket or unexpected herdr error), so the handler returns it directly and needs no wrapping.
 
 - [ ] **Step 5: Run the tests**
 
@@ -280,31 +340,31 @@ git commit -m "daemon: pane:send, arbitrary text injection over the shared deliv
 
 - [ ] **Step 1: Write the failing CLI test**
 
-Append to `commands/__tests__/pane.test.ts` (mock the client the way the other `pane` subcommand tests do):
+Append to `commands/__tests__/pane.test.ts`, matching invite's pane CLI test pattern: each subcommand is an exported function (wired into `lib/command-tree-def.ts` by an `fn` entry) and tested through a local `run(fn, argv, ctx)` helper that injects the daemon client. Use the same helper and client injection the `list`/`peek`/`spawn` subcommand tests use:
 
 ```ts
 test("rt pane send forwards text and HERDR_PANE_ID as callerPane", async () => {
   const calls: any[] = [];
-  const client = fakeClient({ "pane:send": (p: any) => { calls.push(p); return { ok: true, data: { paneId: p.paneId, delivered: "accepted" } }; } });
-  await runPane(["send", "w1:p2", "--text", "standup in 5"], { client, env: { HERDR_PANE_ID: "w1:p1" } });
+  const client = fakeDaemon({ "pane:send": (p: any) => { calls.push(p); return { ok: true, data: { paneId: p.paneId, delivered: "accepted" } }; } });
+  await run(paneSendCommand, ["w1:p2", "--text", "standup in 5"], { client, env: { HERDR_PANE_ID: "w1:p1" } });
   expect(calls[0]).toEqual({ paneId: "w1:p2", text: "standup in 5", callerPane: "w1:p1" });
 });
 
-test("rt pane send prints the delivery outcome and does not exit non-zero on refused", async () => {
-  const client = fakeClient({ "pane:send": () => ({ ok: true, data: { paneId: "w1:p2", delivered: "refused", reason: "at a prompt" } }) });
-  const { stdout, code } = await runPane(["send", "w1:p2", "--text", "x"], { client });
+test("rt pane send prints the outcome and does not exit non-zero on refused", async () => {
+  const client = fakeDaemon({ "pane:send": () => ({ ok: true, data: { paneId: "w1:p2", delivered: "refused", reason: "at a prompt" } }) });
+  const { stdout, code } = await run(paneSendCommand, ["w1:p2", "--text", "x"], { client });
   expect(stdout).toContain("refused");
   expect(stdout).toContain("at a prompt");
   expect(code).toBe(0);
 });
 ```
 
-(Reuse `fakeClient` / `runPane` helpers already in `commands/__tests__/pane.test.ts` from the invite feature; if their names differ, match the existing ones.)
+(`paneSendCommand`, `run`, and `fakeDaemon` stand in for the invite feature's real names; match them from `commands/__tests__/pane.test.ts` and `commands/pane.ts`.)
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `bun test commands/__tests__/pane.test.ts`
-Expected: FAIL, `unknown subcommand "send"`.
+Expected: FAIL, `paneSendCommand` is not defined (the subcommand function does not exist yet).
 
 - [ ] **Step 3: Implement the subcommand**
 
