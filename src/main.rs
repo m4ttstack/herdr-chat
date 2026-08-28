@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod deck;
+mod rt;
 mod run;
 mod cmd {
     pub mod open_viewer;
