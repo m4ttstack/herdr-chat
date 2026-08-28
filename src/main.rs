@@ -5,6 +5,7 @@ mod herdr;
 mod rt;
 mod run;
 mod state;
+mod theme;
 mod cmd {
     pub mod open_viewer;
 }
