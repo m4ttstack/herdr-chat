@@ -13,3 +13,15 @@ id = "open-viewer"
 title = "Open chat viewer"
 contexts = ["workspace"]
 command = ["target/release/herdr-chat", "open-viewer"]
+
+[[actions]]
+id = "sign-in"
+title = "Sign in to chat"
+contexts = ["pane"]
+command = ["target/release/herdr-chat", "sign-in"]
+
+[[actions]]
+id = "sign-out"
+title = "Sign out of chat"
+contexts = ["pane"]
+command = ["target/release/herdr-chat", "sign-out"]
