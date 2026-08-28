@@ -229,7 +229,7 @@ fn draw(frame: &mut Frame, theme: &AppTheme, launcher: &[Row], cursor: usize, sc
     let full = frame.area();
     let w = full.width.saturating_sub(4).clamp(24, 88);
     let h = full.height.saturating_sub(2).max(6);
-    let area = centered(full, w, h);
+    let area = ui::centered(full, w, h);
     frame.render_widget(Clear, area);
 
     let block = Block::new()
@@ -359,18 +359,6 @@ fn footer(theme: &AppTheme, selected: Option<&Row>) -> Paragraph<'static> {
     spans.push(key("esc"));
     spans.push(Span::styled(" close", theme.dim));
     Paragraph::new(Line::from(spans)).style(theme.base)
-}
-
-/// A `width` by `height` rect centered in `area`, clamped to fit.
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let w = width.min(area.width);
-    let h = height.min(area.height);
-    Rect {
-        x: area.x + area.width.saturating_sub(w) / 2,
-        y: area.y + area.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
-    }
 }
 
 #[cfg(test)]

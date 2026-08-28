@@ -147,6 +147,9 @@ fn compose(theme: &AppTheme, dir: &Path) -> Result<Option<(String, Vec<String>)>
                         mode = Mode::Recent;
                         ridx = 0;
                     }
+                    // With no recents to open, ctrl-r is a no-op rather than
+                    // falling through to type a literal `r` into the message.
+                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {}
                     KeyCode::Char(c) => message.push(c),
                     _ => {}
                 },
@@ -190,7 +193,7 @@ fn draw_compose(
     let full = frame.area();
     let w = full.width.saturating_sub(4).clamp(24, 88);
     let h = full.height.saturating_sub(2).max(8);
-    let area = centered(full, w, h);
+    let area = ui::centered(full, w, h);
     frame.render_widget(Clear, area);
 
     let block = Block::new()
@@ -313,7 +316,7 @@ fn draw_result(frame: &mut Frame, theme: &AppTheme, line: &str, recipients: &[Re
     let full = frame.area();
     let w = full.width.saturating_sub(4).clamp(24, 88);
     let h = full.height.saturating_sub(2).max(6);
-    let area = centered(full, w, h);
+    let area = ui::centered(full, w, h);
     frame.render_widget(Clear, area);
 
     let block = Block::new()
@@ -342,18 +345,6 @@ fn draw_result(frame: &mut Frame, theme: &AppTheme, line: &str, recipients: &[Re
     )));
 
     frame.render_widget(Paragraph::new(lines).style(theme.base), inner);
-}
-
-/// A `width` by `height` rect centered in `area`, clamped to fit.
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let w = width.min(area.width);
-    let h = height.min(area.height);
-    Rect {
-        x: area.x + area.width.saturating_sub(w) / 2,
-        y: area.y + area.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
-    }
 }
 
 #[cfg(test)]

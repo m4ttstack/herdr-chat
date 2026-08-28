@@ -14,6 +14,9 @@ use crate::run::{rt_bin, Output, Runner};
 pub struct Presence {
     pub handle: String,
     pub status: String,
+    // A presence row that ever omits `rooms` must not fail the whole `pane_list`
+    // deserialize, which would break picker, broadcast, and detect at once.
+    #[serde(default)]
     pub rooms: Vec<String>,
 }
 

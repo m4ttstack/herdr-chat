@@ -256,7 +256,7 @@ fn draw(
     let full = frame.area();
     let w = full.width.saturating_sub(4).clamp(20, 88);
     let h = full.height.saturating_sub(2).max(6);
-    let area = centered(full, w, h);
+    let area = ui::centered(full, w, h);
     frame.render_widget(Clear, area);
 
     let block = Block::new()
@@ -426,18 +426,6 @@ fn short_path(cwd: &str) -> String {
         cwd.to_string()
     } else {
         format!(".../{leaf}")
-    }
-}
-
-/// A `width` by `height` rect centered in `area`, clamped to fit.
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let w = width.min(area.width);
-    let h = height.min(area.height);
-    Rect {
-        x: area.x + area.width.saturating_sub(w) / 2,
-        y: area.y + area.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
     }
 }
 

@@ -12,7 +12,6 @@ use crate::theme::{self, AppTheme};
 use crate::ui::{self, Flow};
 
 use crossterm::event::KeyCode;
-use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -90,6 +89,11 @@ fn prompt(theme: &AppTheme, panes: &[String], repos: &[String]) -> std::io::Resu
     Ok(choices)
 }
 
+// The panes were already drained out of `pending.json`, so a fail-fast on the
+// first send would strand every pane after it: removed from the queue yet never
+// signed in or re-queued. So each pane is attempted independently and its
+// failure collected; the loop runs to the end and the errors are surfaced
+// together afterward.
 fn apply(
     runner: &dyn Runner,
     dir: &std::path::Path,
@@ -97,26 +101,39 @@ fn apply(
     repos: &[String],
     choices: &[Choice],
 ) -> Result<(), String> {
+    let mut failures: Vec<String> = Vec::new();
     for ((pane, repo), choice) in panes.iter().zip(repos).zip(choices) {
         match choice {
             Choice::Yes => {
-                rt::pane_send(runner, pane, "/chat:sign-in", true)?;
+                if let Err(e) = rt::pane_send(runner, pane, "/chat:sign-in", true) {
+                    failures.push(format!("{pane}: {e}"));
+                }
             }
             Choice::Always => {
-                state::set_pref(dir, repo, SigninPref::Always).map_err(|e| e.to_string())?;
-                rt::pane_send(runner, pane, "/chat:sign-in", true)?;
+                if let Err(e) = state::set_pref(dir, repo, SigninPref::Always) {
+                    failures.push(format!("{repo}: {e}"));
+                }
+                if let Err(e) = rt::pane_send(runner, pane, "/chat:sign-in", true) {
+                    failures.push(format!("{pane}: {e}"));
+                }
             }
             Choice::Never => {
-                state::set_pref(dir, repo, SigninPref::Never).map_err(|e| e.to_string())?;
+                if let Err(e) = state::set_pref(dir, repo, SigninPref::Never) {
+                    failures.push(format!("{repo}: {e}"));
+                }
             }
             Choice::Skip => {}
         }
     }
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 fn draw(frame: &mut Frame, theme: &AppTheme, panes: &[String], repos: &[String], idx: usize) {
-    let area = centered(frame.area(), 62, 9);
+    let area = ui::centered(frame.area(), 62, 9);
     frame.render_widget(Clear, area);
 
     let title = format!(" chat sign-in ({}/{}) ", idx + 1, panes.len());
@@ -153,14 +170,62 @@ fn draw(frame: &mut Frame, theme: &AppTheme, panes: &[String], repos: &[String],
     frame.render_widget(para, area);
 }
 
-/// A `width` by `height` rect centered in `area`, clamped to fit.
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let w = width.min(area.width);
-    let h = height.min(area.height);
-    Rect {
-        x: area.x + area.width.saturating_sub(w) / 2,
-        y: area.y + area.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run::Output;
+    use std::sync::Mutex;
+
+    /// Fake [`Runner`] that records each `pane send` target and fails the one
+    /// whose id is `boom`, so a test can prove a mid-batch send failure does not
+    /// strand the panes queued after it.
+    struct FakeRunner {
+        boom: String,
+        sent: Mutex<Vec<String>>,
+    }
+
+    impl Runner for FakeRunner {
+        fn run(&self, argv: &[&str], _env: &[(&str, Option<&str>)]) -> std::io::Result<Output> {
+            // `pane send <pane> --text <body> --json`: the target is argv[3].
+            let pane = argv.get(3).copied().unwrap_or_default();
+            self.sent.lock().unwrap().push(pane.to_string());
+            if pane == self.boom {
+                Ok(Output {
+                    status: 1,
+                    stdout: String::new(),
+                    stderr: "rt: no such pane".to_string(),
+                })
+            } else {
+                Ok(Output {
+                    status: 0,
+                    stdout: r#"{"paneId":"p","delivered":"accepted"}"#.to_string(),
+                    stderr: String::new(),
+                })
+            }
+        }
+    }
+
+    #[test]
+    fn apply_continues_past_a_failed_send() {
+        let r = FakeRunner {
+            boom: "w1:p2".to_string(),
+            sent: Mutex::new(Vec::new()),
+        };
+        let panes = vec![
+            "w1:p1".to_string(),
+            "w1:p2".to_string(),
+            "w1:p3".to_string(),
+        ];
+        let repos = vec!["r1".to_string(), "r2".to_string(), "r3".to_string()];
+        let choices = vec![Choice::Yes, Choice::Yes, Choice::Yes];
+
+        // `dir` is untouched for `Yes` choices (no pref is written).
+        let result = apply(&r, std::path::Path::new("."), &panes, &repos, &choices);
+
+        // Every pane was attempted, including the two on either side of the
+        // failure: the mid-batch failure does not abandon the rest.
+        assert_eq!(*r.sent.lock().unwrap(), vec!["w1:p1", "w1:p2", "w1:p3"]);
+        // The failure is still surfaced rather than swallowed.
+        assert!(result.is_err());
     }
 }
