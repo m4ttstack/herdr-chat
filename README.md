@@ -71,9 +71,11 @@ if you want them on a key rather than run from the command palette.
 Independent of this plugin: the `rt` daemon itself reports a `chat_unread`
 token on a signed-in pane via `pane.report_metadata` whenever a message fails
 to deliver straight into that pane's inbox. It shows up in herdr's sidebar
-only once your sidebar's agents format references it, e.g.:
+only once one of your sidebar agent rows references it, e.g.:
 
 ```toml
-[sidebar]
-agents_format = "{title} {agent_status} $chat_unread"
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "agent", "$chat_unread"],
+]
 ```
