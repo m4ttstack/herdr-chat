@@ -10,7 +10,9 @@ mod ui;
 mod cmd {
     pub mod broadcast;
     pub mod detect;
+    pub mod jump;
     pub mod open_viewer;
+    pub mod peek;
     pub mod picker;
     pub mod sign;
     pub mod signin_ask;
@@ -33,6 +35,12 @@ enum Cmd {
     /// Broadcast a message to picked panes. The workspace action opens the
     /// popup; `--pane` is the popup entrypoint that runs the TUI.
     Broadcast {
+        #[arg(long)]
+        pane: bool,
+    },
+    /// Peek: online buddies + unread rooms as a launcher. The workspace action
+    /// opens the popup; `--pane` is the popup entrypoint that runs the TUI.
+    Peek {
         #[arg(long)]
         pane: bool,
     },
@@ -60,6 +68,20 @@ fn main() -> std::process::ExitCode {
                 Ok(_) => std::process::ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("broadcast: {e}");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
+        Cmd::Peek { pane } => {
+            let result = if pane {
+                cmd::peek::run(&runner)
+            } else {
+                cmd::peek::open(&runner)
+            };
+            match result {
+                Ok(_) => std::process::ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("peek: {e}");
                     std::process::ExitCode::FAILURE
                 }
             }

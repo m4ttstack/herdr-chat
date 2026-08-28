@@ -21,6 +21,12 @@ contexts = ["workspace"]
 command = ["target/release/herdr-chat", "broadcast"]
 
 [[actions]]
+id = "peek"
+title = "Chat peek"
+contexts = ["workspace"]
+command = ["target/release/herdr-chat", "peek"]
+
+[[actions]]
 id = "sign-in"
 title = "Sign in to chat"
 contexts = ["pane"]
@@ -43,6 +49,14 @@ placement = "popup"
 width = "70%"
 height = "60%"
 command = ["target/release/herdr-chat", "broadcast", "--pane"]
+
+[[panes]]
+id = "peek-ui"
+title = "Chat peek"
+placement = "popup"
+width = "70%"
+height = "60%"
+command = ["target/release/herdr-chat", "peek", "--pane"]
 
 [[panes]]
 id = "signin-ask"
