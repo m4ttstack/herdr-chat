@@ -145,7 +145,11 @@ pub fn pane_send(
     } else {
         &[]
     };
-    run_json(r, &[rt.as_str(), "pane", "send", pane, "--text", text], env)
+    run_json(
+        r,
+        &[rt.as_str(), "pane", "send", pane, "--text", text, "--json"],
+        env,
+    )
 }
 
 pub fn post(r: &dyn Runner, room: &str, body: &str) -> Result<(), String> {
@@ -249,7 +253,7 @@ mod tests {
 
     #[test]
     fn pane_send_scrub_unsets_herdr_pane_id() {
-        let r = FakeRunner::capture(r#"{"paneId":"w1:p2","delivered":"accepted"}"#);
+        let r = FakeRunner::capture(r#"{"ok":true,"paneId":"w1:p2","delivered":"accepted"}"#);
         pane_send(&r, "w1:p2", "hi", true).unwrap();
         let call = r.last();
         assert!(call
@@ -258,7 +262,7 @@ mod tests {
             .any(|(k, v)| *k == "HERDR_PANE_ID" && v.is_none()));
         assert_eq!(
             call.argv,
-            vec!["rt", "pane", "send", "w1:p2", "--text", "hi"]
+            vec!["rt", "pane", "send", "w1:p2", "--text", "hi", "--json"]
         );
     }
 
@@ -266,7 +270,7 @@ mod tests {
     fn pane_send_delivers_multiline_text_via_stdin_or_arg() {
         // Chosen contract: text rides as a single `--text` argv element, so a
         // newline survives without a stdin dance.
-        let r = FakeRunner::capture(r#"{"paneId":"w1:p2","delivered":"queued"}"#);
+        let r = FakeRunner::capture(r#"{"ok":true,"paneId":"w1:p2","delivered":"queued"}"#);
         let out = pane_send(&r, "w1:p2", "line one\nline two", false).unwrap();
         assert_eq!(out.delivered, "queued");
         assert_eq!(r.last().argv[5], "line one\nline two");
@@ -274,7 +278,7 @@ mod tests {
 
     #[test]
     fn pane_send_no_scrub_leaves_env_untouched() {
-        let r = FakeRunner::capture(r#"{"paneId":"w1:p2","delivered":"queued"}"#);
+        let r = FakeRunner::capture(r#"{"ok":true,"paneId":"w1:p2","delivered":"queued"}"#);
         pane_send(&r, "w1:p2", "hi", false).unwrap();
         assert!(r.last().env.is_empty());
     }
