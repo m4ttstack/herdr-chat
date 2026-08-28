@@ -1,0 +1,15 @@
+id = "m4ttstack.chat"
+name = "Chat"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "rt chat where the agents live: broadcast, presence, jump-to-pane"
+platforms = ["macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[actions]]
+id = "open-viewer"
+title = "Open chat viewer"
+contexts = ["workspace"]
+command = ["target/release/herdr-chat", "open-viewer"]
