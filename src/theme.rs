@@ -127,13 +127,16 @@ fn parse_color(s: &str) -> Option<Color> {
     }
 
     if let Some(hex) = s.strip_prefix('#') {
-        if hex.len() == 6 {
+        // len() is byte length: gate on is_ascii() so a multi-byte value never
+        // slices mid-character (which would panic and abort the plugin at launch
+        // instead of falling back).
+        if hex.is_ascii() && hex.len() == 6 {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
             return Some(Color::Rgb(r, g, b));
         }
-        if hex.len() == 3 {
+        if hex.is_ascii() && hex.len() == 3 {
             let mut nibbles = hex.chars().map(|c| c.to_digit(16).map(|d| (d * 17) as u8));
             let r = nibbles.next().flatten()?;
             let g = nibbles.next().flatten()?;
@@ -260,5 +263,19 @@ subtext0 = "#a6adc8"
         assert_eq!(parse_color("purple"), Some(Color::Magenta));
         assert_eq!(parse_color("reset"), Some(Color::Reset));
         assert_eq!(parse_color("not-a-color"), None);
+    }
+
+    #[test]
+    fn non_ascii_hex_does_not_panic_and_falls_back() {
+        // "\u{20ac}uro" is 6 bytes after the '#', so a byte-length gate without
+        // an ASCII check would slice mid-character and panic. It must yield None.
+        assert_eq!(parse_color("#\u{20ac}uro"), None);
+
+        // Reaching it through the real config path must not abort: the invalid
+        // text color is dropped and base keeps the fallback (no explicit fg).
+        let config = "[theme.custom]\ntext = \"#\u{20ac}uro\"\naccent = \"#f5c2e7\"\n";
+        let t = from_herdr_config(config).expect("parse");
+        assert_eq!(t.base.fg, None);
+        assert_eq!(t.accent.fg, Some(Color::Rgb(0xf5, 0xc2, 0xe7)));
     }
 }
