@@ -70,6 +70,11 @@ pub fn rows(buddies: Vec<rt::Buddy>, rooms: Vec<rt::Room>) -> Vec<Row> {
     }
 
     for b in buddies {
+        // Offline buddies carry no unread (unread is per-room) and are not
+        // present, so they add no signal to a who's-online launcher.
+        if b.status == "offline" {
+            continue;
+        }
         out.push(Row {
             kind: RowKind::Buddy,
             handle: Some(b.handle),
@@ -385,6 +390,13 @@ mod tests {
         let out = rows(vec![], vec![room("quiet", 0, 0), room("busy", 2, 0)]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].room.as_deref(), Some("busy"));
+    }
+
+    #[test]
+    fn offline_buddies_are_dropped() {
+        let out = rows(vec![buddy("on", "live"), buddy("gone", "offline")], vec![]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].handle.as_deref(), Some("on"));
     }
 
     #[test]
