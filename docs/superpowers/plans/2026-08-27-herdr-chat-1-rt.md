@@ -4,7 +4,7 @@
 
 **Goal:** Add the one rt verb the herdr-chat plugin's broadcast needs: `rt pane send <pane> --text <text>`, which injects arbitrary text into one Claude pane and reports delivery. Extract the injection core from the invite feature's `chat:invite` so both verbs share one implementation.
 
-**Architecture:** The invite feature already implements the herdr injection delivery model (blocked is refused, working is queued, otherwise prompt then a single Enter nudge then queued) inside `chat:invite` in `lib/daemon/handlers/chat.ts`. This plan lifts that logic into a standalone `lib/herdr/inject.ts` helper, re-points `chat:invite` at it (its tests stay green), then builds `pane:send` as a second, thinner caller that delivers a caller-supplied multi-line string instead of a fixed slash command. The verb is cataloged in rt-client, handled in `lib/daemon/handlers/pane.ts`, routed, exposed as `rt pane send`, and wrapped as `paneSend()`.
+**Architecture:** The invite feature already implements the herdr injection delivery model (blocked is refused, working is queued, otherwise prompt then a single Enter nudge then queued) inside `chat:invite` in `lib/daemon/handlers/chat.ts`. This plan lifts that logic into a standalone `lib/daemon/inject.ts` helper (the daemon layer, so it can use `herdrError` without inverting the `lib/herdr <- lib/daemon` layering), re-points `chat:invite` at it (its tests stay green), then builds `pane:send` as a second, thinner caller that delivers a caller-supplied multi-line string instead of a fixed slash command. The verb is cataloged in rt-client, handled in `lib/daemon/handlers/pane.ts`, routed, exposed as `rt pane send`, and wrapped as `paneSend()`.
 
 **Tech Stack:** Bun (`Bun.connect` unix sockets, `bun:test`, `bun:sqlite`), TypeScript, the rt daemon's typed handler contract (`TypedHandlers`), rt-client.
 
@@ -26,7 +26,7 @@
 
 ---
 
-### Task 1: extract the injection core into `lib/herdr/inject.ts`
+### Task 1: extract the injection core into `lib/daemon/inject.ts`
 
 Lift the delivery logic out of `chat:invite` so `pane:send` can share it. `chat:invite`'s behavior and its tests must not change.
 
