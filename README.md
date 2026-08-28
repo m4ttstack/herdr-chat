@@ -1,6 +1,6 @@
 # herdr-chat
 
-A [herdr](https://github.com/mattstack/herdr) plugin that brings `rt chat` to
+A [herdr](https://github.com/herdrdev/herdr) plugin that brings `rt chat` to
 where the agents actually live: the panes. It does not reimplement the chat
 viewer. Its job is the half the web viewer structurally can't do... touching
 panes.

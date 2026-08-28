@@ -116,15 +116,15 @@ Ratified in brainstorming, 2026-08-27:
 
 ## The plugin (herdr-chat)
 
-Repo `mattstack/herdr-chat`, plugin id `mattstack.chat`, a `herdr-plugin.toml`
-at the root, installable with `herdr plugin install mattstack/herdr-chat`.
+Repo `m4ttstack/herdr-chat`, plugin id `m4ttstack.chat`, a `herdr-plugin.toml`
+at the root, installable with `herdr plugin install m4ttstack/herdr-chat`.
 macOS first (the estate is macOS, deck's `open` and the deck API are local);
 Linux is a named follow-up.
 
 ### Manifest shape
 
 ```toml
-id = "mattstack.chat"
+id = "m4ttstack.chat"
 name = "Chat"
 version = "0.1.0"
 min_herdr_version = "0.8.2"
@@ -205,11 +205,11 @@ a manifest capability**: herdr's plugin manifest accepts only `build`,
 `startup`, `actions`, `events`, `panes`, and `link_handlers`, so no `prefix+b`
 / `prefix+c` bindings appear in the sketch above. They install into the user's
 herdr keys config (a `[[keys.command]]` of type `plugin_action` naming
-`mattstack.chat.broadcast` and `mattstack.chat.peek`), documented as an install
+`m4ttstack.chat.broadcast` and `m4ttstack.chat.peek`), documented as an install
 step in the README; the manifest parser ignores unknown fields silently, so a
 binding left in the manifest would do nothing at all. Second, an interactive
 action is a command that opens its own popup by calling
-`herdr plugin pane open --plugin mattstack.chat --entrypoint <id>`, so each
+`herdr plugin pane open --plugin m4ttstack.chat --entrypoint <id>`, so each
 `[[actions]]` entry and its `[[panes]]` entrypoint are two halves of one flow.
 `contexts = ["pane"]` on the sign actions is a real context value.
 `min_herdr_version` is pinned to the version whose event names and popup fields
