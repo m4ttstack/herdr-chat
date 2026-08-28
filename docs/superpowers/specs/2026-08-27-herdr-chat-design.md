@@ -233,7 +233,10 @@ subcommands draw a ratatui popup; the rest are argv glue with no UI.
   spawn detects many agents at once and a popup is a session-modal singleton, so
   a second `on-agent-detected` whose `plugin pane open` returns `ui_busy` simply
   leaves its pane in the pending file for the open popup to drain... detections
-  coalesce into one prompt rather than stacking.
+  coalesce into one prompt rather than stacking. The popup drains the pending
+  file once more just before it exits, so a pane appended after its last drain
+  (its own `plugin pane open` having hit `ui_busy`) is not stranded until the
+  next detection.
 - **`sign-in` / `sign-out`** (pane-context actions, no UI). Inject
   `/chat:sign-in` or the sign-out command into the focused pane
   (`HERDR_PANE_ID` from context), scrubbing `HERDR_PANE_ID` from the `rt`
@@ -398,7 +401,9 @@ Every popup carries a herdr-style footer of keyhints and closes on Escape.
   `rt` / `herdr` / `deck` responses), so no real daemon is needed: broadcast
   fan-out and results aggregation, `on-agent-detected` honoring each preference,
   deck URL resolution with the api.json path and the setting fallback, jump
-  mapping a handle to a paneId and focusing, quick-send routing room versus DM.
+  mapping a handle to a paneId and focusing, quick-send routing room versus DM,
+  the `HERDR_PANE_ID` scrub (a deliberate self-target subcommand shells `rt`
+  with no `HERDR_PANE_ID` in its env).
   ratatui popups rendered to a test backend for the picker filter/sort/group,
   select-all-online, disabled rows, and the peek launcher actions. Manifest
   validated with `herdr plugin link` then `herdr plugin action list`.
