@@ -1,7 +1,7 @@
 id = "m4ttstack.chat"
 name = "Chat"
 version = "0.1.0"
-min_herdr_version = "0.8.2"
+min_herdr_version = "0.8.0"
 description = "rt chat where the agents live: broadcast, presence, jump-to-pane"
 platforms = ["macos"]
 
