@@ -14,7 +14,7 @@ use crate::ui::{self, Flow};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 /// A quick-send destination: a room (routes to [`rt::post`]) or a buddy DM
@@ -123,20 +123,7 @@ fn draw(
     line: &str,
     scroll: &mut usize,
 ) {
-    let full = frame.area();
-    let w = full.width.saturating_sub(4).clamp(24, 88);
-    let h = full.height.saturating_sub(2).max(6);
-    let area = ui::centered(full, w, h);
-    frame.render_widget(Clear, area);
-
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .title(" quick send ")
-        .border_style(theme.border)
-        .style(theme.base);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
+    let inner = ui::content(frame.area());
     let rows = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(1),

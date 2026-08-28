@@ -14,7 +14,7 @@ use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 /// Whether a launcher row stands for an online buddy or an unread room.
@@ -205,20 +205,7 @@ fn primary(row: &Row) -> Action {
 }
 
 fn draw(frame: &mut Frame, theme: &AppTheme, launcher: &[Row], cursor: usize, scroll: &mut usize) {
-    let full = frame.area();
-    let w = full.width.saturating_sub(4).clamp(24, 88);
-    let h = full.height.saturating_sub(2).max(6);
-    let area = ui::centered(full, w, h);
-    frame.render_widget(Clear, area);
-
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .title(" chat peek ")
-        .border_style(theme.border)
-        .style(theme.base);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
+    let inner = ui::content(frame.area());
     let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
     draw_list(frame, theme, launcher, cursor, parts[0], scroll);
     frame.render_widget(footer(theme, launcher.get(cursor)), parts[1]);
@@ -319,7 +306,7 @@ fn buddy_dot(theme: &AppTheme, status: Option<&str>) -> (char, Style) {
 /// selected row; close is always available.
 fn footer(theme: &AppTheme, selected: Option<&Row>) -> Paragraph<'static> {
     let key = |k: &'static str| Span::styled(k, theme.accent);
-    let mut spans = Vec::new();
+    let mut spans = vec![key("up/down"), Span::styled(" move  ", theme.dim)];
     match selected.map(|r| r.kind) {
         Some(RowKind::Buddy) => {
             spans.push(key("enter"));
@@ -331,6 +318,8 @@ fn footer(theme: &AppTheme, selected: Option<&Row>) -> Paragraph<'static> {
         }
         None => {}
     }
+    spans.push(key("o"));
+    spans.push(Span::styled(" viewer  ", theme.dim));
     spans.push(key("esc"));
     spans.push(Span::styled(" close", theme.dim));
     Paragraph::new(Line::from(spans)).style(theme.base)
