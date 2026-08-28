@@ -36,6 +36,10 @@ pub struct Row {
     pub handle: Option<String>,
     /// The buddy's presence status (buddy rows), else `None`.
     pub status: Option<String>,
+    /// The buddy's repo / branch / task title, from the pane roster (buddy rows).
+    pub repo: Option<String>,
+    pub branch: Option<String>,
+    pub title: Option<String>,
     /// The room name (room rows), else `None`.
     pub room: Option<String>,
     pub unread: u32,
@@ -52,7 +56,11 @@ pub struct Row {
 /// the rest, then the identity label (handle or room) ascending. Since every
 /// unread/mention room outranks every buddy (which sits at 0/0), the effect is
 /// hot rooms on top, then online buddies live-first and alphabetical.
-pub fn rows(buddies: Vec<rt::Buddy>, rooms: Vec<rt::Room>) -> Vec<Row> {
+pub fn rows(
+    buddies: Vec<rt::Buddy>,
+    rooms: Vec<rt::Room>,
+    details: &std::collections::HashMap<String, rt::AgentDetail>,
+) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::new();
 
     for r in rooms {
@@ -63,6 +71,9 @@ pub fn rows(buddies: Vec<rt::Buddy>, rooms: Vec<rt::Room>) -> Vec<Row> {
             kind: RowKind::Room,
             handle: None,
             status: None,
+            repo: None,
+            branch: None,
+            title: None,
             room: Some(r.room),
             unread: r.unread,
             mentions: r.mentions,
@@ -75,10 +86,14 @@ pub fn rows(buddies: Vec<rt::Buddy>, rooms: Vec<rt::Room>) -> Vec<Row> {
         if b.status == "offline" {
             continue;
         }
+        let detail = details.get(&b.handle).cloned().unwrap_or_default();
         out.push(Row {
             kind: RowKind::Buddy,
             handle: Some(b.handle),
             status: Some(b.status),
+            repo: detail.repo,
+            branch: detail.branch,
+            title: detail.title,
             room: None,
             unread: 0,
             mentions: 0,
@@ -136,7 +151,8 @@ pub fn run(r: &dyn Runner) -> Result<(), String> {
     let buddies = rt::buddies(r).unwrap_or_default();
     let rooms = rt::rooms(r).unwrap_or_default();
     let panes = rt::pane_list(r).unwrap_or_default();
-    let launcher = rows(buddies, rooms);
+    let details = rt::agent_details(&panes);
+    let launcher = rows(buddies, rooms, &details);
 
     let action = choose(&theme, &launcher).map_err(|e| e.to_string())?;
 
@@ -268,13 +284,25 @@ fn row_line<'a>(theme: &AppTheme, row: &'a Row, cursor: bool) -> Line<'a> {
         RowKind::Buddy => {
             let (dot, dot_style) = buddy_dot(theme, row.status.as_deref());
             let handle = row.handle.as_deref().unwrap_or("?");
-            let status = row.status.as_deref().unwrap_or("");
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(marker, row_style),
                 Span::styled(format!("{dot} "), dot_style),
-                Span::styled(handle.to_string(), row_style),
-                Span::styled(format!("   {status}"), theme.dim),
-            ])
+                Span::styled(format!("{handle:<8}"), row_style),
+            ];
+            // repo · branch, from the pane roster, so the row says where the
+            // agent is, not just who; the dot already carries presence.
+            if let Some(repo) = row.repo.as_deref() {
+                let branch = row.branch.as_deref().unwrap_or("-");
+                spans.push(Span::styled(format!("  {repo} \u{b7} {branch}"), theme.dim));
+            }
+            // The pane title is the agent's task line; skip it when it just
+            // echoes the handle (nothing new to say).
+            if let Some(title) = row.title.as_deref() {
+                if title != handle && !title.is_empty() {
+                    spans.push(Span::styled(format!("   {title}"), row_style));
+                }
+            }
+            Line::from(spans)
         }
         RowKind::Room => {
             let room = row.room.as_deref().unwrap_or("?");
@@ -351,15 +379,23 @@ mod tests {
         }
     }
 
+    fn no_details() -> std::collections::HashMap<String, rt::AgentDetail> {
+        std::collections::HashMap::new()
+    }
+
     #[test]
     fn peek_rows_carry_unread_from_rooms() {
-        let out = rows(vec![buddy("fred", "live")], vec![room("build", 3, 1)]);
+        let out = rows(
+            vec![buddy("fred", "live")],
+            vec![room("build", 3, 1)],
+            &no_details(),
+        );
         assert_eq!(out.iter().map(|r| r.unread).sum::<u32>(), 3);
     }
 
     #[test]
     fn a_buddy_with_no_unread_still_appears() {
-        let out = rows(vec![buddy("fred", "live")], vec![]);
+        let out = rows(vec![buddy("fred", "live")], vec![], &no_details());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, RowKind::Buddy);
         assert_eq!(out[0].handle.as_deref(), Some("fred"));
@@ -372,7 +408,7 @@ mod tests {
         // room's unread; the count lives only on the room row.
         let mut b = buddy("fred", "live");
         b.rooms = vec!["build".to_string()];
-        let out = rows(vec![b], vec![room("build", 3, 0)]);
+        let out = rows(vec![b], vec![room("build", 3, 0)], &no_details());
         let fred = out
             .iter()
             .find(|r| r.handle.as_deref() == Some("fred"))
@@ -387,16 +423,42 @@ mod tests {
 
     #[test]
     fn rooms_without_unread_or_mentions_are_dropped() {
-        let out = rows(vec![], vec![room("quiet", 0, 0), room("busy", 2, 0)]);
+        let out = rows(
+            vec![],
+            vec![room("quiet", 0, 0), room("busy", 2, 0)],
+            &no_details(),
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].room.as_deref(), Some("busy"));
     }
 
     #[test]
     fn offline_buddies_are_dropped() {
-        let out = rows(vec![buddy("on", "live"), buddy("gone", "offline")], vec![]);
+        let out = rows(
+            vec![buddy("on", "live"), buddy("gone", "offline")],
+            vec![],
+            &no_details(),
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].handle.as_deref(), Some("on"));
+    }
+
+    #[test]
+    fn buddy_rows_pick_up_repo_branch_and_title_from_details() {
+        let mut details = std::collections::HashMap::new();
+        details.insert(
+            "kai".to_string(),
+            rt::AgentDetail {
+                repo: Some("console".into()),
+                branch: Some("feat/x".into()),
+                title: Some("app-kit".into()),
+            },
+        );
+        let out = rows(vec![buddy("kai", "live")], vec![], &details);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].repo.as_deref(), Some("console"));
+        assert_eq!(out[0].branch.as_deref(), Some("feat/x"));
+        assert_eq!(out[0].title.as_deref(), Some("app-kit"));
     }
 
     #[test]
@@ -404,6 +466,7 @@ mod tests {
         let out = rows(
             vec![buddy("amy", "live"), buddy("bob", "live")],
             vec![room("x", 1, 0), room("y", 5, 2)],
+            &no_details(),
         );
         let ids: Vec<&str> = out
             .iter()
@@ -422,6 +485,7 @@ mod tests {
                 buddy("amy", "live"),
             ],
             vec![],
+            &no_details(),
         );
         let ids: Vec<&str> = out.iter().map(|r| r.handle.as_deref().unwrap()).collect();
         // live before idle; alphabetical within a status.
