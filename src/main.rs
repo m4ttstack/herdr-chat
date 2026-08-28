@@ -10,6 +10,7 @@ mod ui;
 mod cmd {
     pub mod detect;
     pub mod open_viewer;
+    pub mod picker;
     pub mod sign;
     pub mod signin_ask;
 }
