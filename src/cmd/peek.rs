@@ -108,9 +108,7 @@ fn label(row: &Row) -> &str {
     row.handle.as_deref().or(row.room.as_deref()).unwrap_or("")
 }
 
-/// The row action the popup captured. The popup exits before any of these fire:
-/// herdr popups are session-modal singletons, so peek's own popup must be gone
-/// before a follow-on popup (broadcast, quick-send) can take the slot.
+/// The row action the popup captured.
 enum Action {
     /// Esc/q: close and do nothing.
     None,
@@ -118,10 +116,6 @@ enum Action {
     Jump(String),
     /// Open this room in the web viewer.
     OpenViewer(String),
-    /// Open the broadcast popup.
-    Broadcast,
-    /// Open the quick-send popup.
-    QuickSend,
 }
 
 /// The workspace action: open the peek popup. A popup process carries no
@@ -149,10 +143,6 @@ pub fn run(r: &dyn Runner) -> Result<(), String> {
             }
             Ok(())
         }
-        Action::Broadcast => herdr::open_popup(r, "broadcast-ui"),
-        // The quick-send popup is registered by a sibling task; a forward
-        // reference to its entrypoint id is fine.
-        Action::QuickSend => herdr::open_popup(r, "quick-send-ui"),
         Action::OpenViewer(room) => {
             let _ = crate::cmd::open_viewer::run(r, Some(&room));
             Ok(())
@@ -162,8 +152,8 @@ pub fn run(r: &dyn Runner) -> Result<(), String> {
 
 /// Run the launcher popup to completion and return the chosen [`Action`].
 /// Up/down (or k/j) move the cursor; Enter fires the row's primary action (jump
-/// for a buddy, open-in-viewer for a room); `b`/`s` open broadcast/quick-send;
-/// `o` opens a room row in the viewer; Esc/q cancel.
+/// for a buddy, open-in-viewer for a room); `o` opens a room row in the viewer;
+/// Esc/q cancel.
 fn choose(theme: &AppTheme, launcher: &[Row]) -> std::io::Result<Action> {
     let mut cursor = 0usize;
     let mut scroll = 0usize;
@@ -188,14 +178,6 @@ fn choose(theme: &AppTheme, launcher: &[Row]) -> std::io::Result<Action> {
                         action = Action::OpenViewer(room);
                         exit = true;
                     }
-                }
-                KeyCode::Char('b') => {
-                    action = Action::Broadcast;
-                    exit = true;
-                }
-                KeyCode::Char('s') => {
-                    action = Action::QuickSend;
-                    exit = true;
                 }
                 KeyCode::Esc | KeyCode::Char('q') => exit = true,
                 _ => {}
@@ -337,7 +319,7 @@ fn buddy_dot(theme: &AppTheme, status: Option<&str>) -> (char, Style) {
 }
 
 /// The footer's key hints. The primary (Enter) verb is contextual to the
-/// selected row; broadcast/quick-send/close are always available.
+/// selected row; close is always available.
 fn footer(theme: &AppTheme, selected: Option<&Row>) -> Paragraph<'static> {
     let key = |k: &'static str| Span::styled(k, theme.accent);
     let mut spans = Vec::new();
@@ -352,10 +334,6 @@ fn footer(theme: &AppTheme, selected: Option<&Row>) -> Paragraph<'static> {
         }
         None => {}
     }
-    spans.push(key("b"));
-    spans.push(Span::styled(" broadcast  ", theme.dim));
-    spans.push(key("s"));
-    spans.push(Span::styled(" quick-send  ", theme.dim));
     spans.push(key("esc"));
     spans.push(Span::styled(" close", theme.dim));
     Paragraph::new(Line::from(spans)).style(theme.base)
