@@ -63,7 +63,7 @@ export interface InjectOptions {
 export function injectIntoPane(opts: InjectOptions): Promise<{ ok: true; data: InjectResult } | { ok: false; error: string }>;
 ```
 
-- Consumes: `herdrRequest`, `waitTimeout` from `lib/herdr/client.ts`; `herdrError` from `lib/daemon/handlers/pane.ts`. The helper lives in the daemon layer (`lib/daemon/inject.ts`), not `lib/herdr/`, so importing `herdrError` (a sibling daemon-handler export) preserves the one-way `lib/herdr <- lib/daemon` layering the invite plan established.
+- Consumes: `herdrRequest`, `waitTimeout`, `HERDR_UNAVAILABLE` from `lib/herdr/client.ts`. `herdrError` is *relocated into this file* from `lib/daemon/handlers/pane.ts` (logic unchanged) and re-exported from `pane.ts`, so `inject.ts` and `pane.ts` never import each other (no cycle) while both stay in the daemon layer above `lib/herdr`.
 
 - [ ] **Step 1: Read the merged `chat:invite` delivery block**
 
@@ -177,10 +177,17 @@ Expected: FAIL, `Cannot find module "../inject.ts"`.
 Create `lib/daemon/inject.ts` by generalizing invite's `chat:invite` delivery so the injected string is `opts.text` (not a hardcoded `/chat:join`). Verify the merged `chat:invite` still matches this before copying; the reason strings, the `wait` shape, and the `pane.send_keys` nudge come straight from it:
 
 ```ts
-import { herdrRequest, waitTimeout } from "../herdr/client.ts";
-import { herdrError } from "./handlers/pane.ts";
+import { herdrRequest, waitTimeout, HERDR_UNAVAILABLE } from "../herdr/client.ts";
 
 const DEFAULT_WAIT_MS = 5_000;
+
+/** Relocated from handlers/pane.ts (logic unchanged), re-exported there; keeps inject.ts and pane.ts from importing each other. */
+export function herdrError(res: { ok: false; code: string; message: string }): { ok: false; error: string } {
+  if (res.code === "unreachable" || res.code === "timeout") {
+    return { ok: false, error: res.message.startsWith(HERDR_UNAVAILABLE) ? res.message : `${HERDR_UNAVAILABLE}: ${res.message}` };
+  }
+  return { ok: false, error: `${res.code}: ${res.message}` };
+}
 
 export type InjectDelivery = "accepted" | "queued" | "refused";
 export interface InjectResult { paneId: string; delivered: InjectDelivery; reason?: string }
@@ -219,6 +226,8 @@ export async function injectIntoPane(opts: InjectOptions): Promise<{ ok: true; d
   return ok(nudged.ok ? "accepted" : "queued");
 }
 ```
+
+Relocate `herdrError` from `lib/daemon/handlers/pane.ts` into this file as shown (logic unchanged) and add `export { herdrError } from "../inject.ts";` to `pane.ts`, so `pane:list` / `pane:peek` and any other importer keep working. This breaks the otherwise-benign `inject <-> pane` import cycle.
 
 - [ ] **Step 5: Re-point `chat:invite` at the helper**
 
