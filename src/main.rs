@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod deck;
+mod herdr;
 mod rt;
 mod run;
 mod cmd {
