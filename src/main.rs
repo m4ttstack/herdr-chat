@@ -14,6 +14,7 @@ mod cmd {
     pub mod open_viewer;
     pub mod peek;
     pub mod picker;
+    pub mod quick_send;
     pub mod sign;
     pub mod signin_ask;
 }
@@ -41,6 +42,12 @@ enum Cmd {
     /// Peek: online buddies + unread rooms as a launcher. The workspace action
     /// opens the popup; `--pane` is the popup entrypoint that runs the TUI.
     Peek {
+        #[arg(long)]
+        pane: bool,
+    },
+    /// Quick-send: one line to a room or a buddy DM. The workspace action
+    /// opens the popup; `--pane` is the popup entrypoint that runs the TUI.
+    QuickSend {
         #[arg(long)]
         pane: bool,
     },
@@ -82,6 +89,20 @@ fn main() -> std::process::ExitCode {
                 Ok(_) => std::process::ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("peek: {e}");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
+        Cmd::QuickSend { pane } => {
+            let result = if pane {
+                cmd::quick_send::run(&runner)
+            } else {
+                cmd::quick_send::open(&runner)
+            };
+            match result {
+                Ok(_) => std::process::ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("quick-send: {e}");
                     std::process::ExitCode::FAILURE
                 }
             }

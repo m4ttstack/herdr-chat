@@ -115,6 +115,18 @@ fn run_ok(r: &dyn Runner, argv: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// Like [`run_ok`] but feeds `stdin` to the child. Used to deliver a body a
+/// leading-dash positional would misparse (see [`post`], [`dm`]).
+fn run_ok_stdin(r: &dyn Runner, argv: &[&str], stdin: &str) -> Result<(), String> {
+    let out = r
+        .run_with_stdin(argv, &[], stdin)
+        .map_err(|e| e.to_string())?;
+    if out.status != 0 {
+        return Err(err_text(&out));
+    }
+    Ok(())
+}
+
 #[derive(serde::Deserialize)]
 struct Panes {
     panes: Vec<ChatPane>,
@@ -182,14 +194,28 @@ pub fn pane_send(
     }
 }
 
+// rt's `resolveBody` treats a lone `-` positional as "read the body from
+// stdin" (repo-tools/commands/chat.ts, `positionals`/`resolveBody`); a body
+// that IS exactly `-` would otherwise be swallowed as that sentinel rather
+// than posted literally. So any body starting with `-` rides stdin under a
+// literal `-` positional instead, mirroring pane_send's `--text -` sentinel;
+// every other body stays a single positional argv element.
 pub fn post(r: &dyn Runner, room: &str, body: &str) -> Result<(), String> {
     let rt = rt_bin();
-    run_ok(r, &[rt.as_str(), "chat", "post", room, body])
+    if body.starts_with('-') {
+        run_ok_stdin(r, &[rt.as_str(), "chat", "post", room, "-"], body)
+    } else {
+        run_ok(r, &[rt.as_str(), "chat", "post", room, body])
+    }
 }
 
 pub fn dm(r: &dyn Runner, to: &str, body: &str) -> Result<(), String> {
     let rt = rt_bin();
-    run_ok(r, &[rt.as_str(), "chat", "dm", to, body])
+    if body.starts_with('-') {
+        run_ok_stdin(r, &[rt.as_str(), "chat", "dm", to, "-"], body)
+    } else {
+        run_ok(r, &[rt.as_str(), "chat", "dm", to, body])
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +428,42 @@ mod tests {
         let r = FakeRunner::capture("");
         dm(&r, "meg", "hey there").unwrap();
         assert_eq!(r.last().argv, vec!["rt", "chat", "dm", "meg", "hey there"]);
+    }
+
+    #[test]
+    fn post_routes_a_leading_dash_body_through_stdin() {
+        let r = FakeRunner::capture("");
+        post(&r, "build", "-rf everything").unwrap();
+        let call = r.last();
+        assert_eq!(call.argv, vec!["rt", "chat", "post", "build", "-"]);
+        assert_eq!(call.stdin.as_deref(), Some("-rf everything"));
+    }
+
+    #[test]
+    fn post_routes_a_bare_dash_body_through_stdin() {
+        let r = FakeRunner::capture("");
+        post(&r, "build", "-").unwrap();
+        let call = r.last();
+        assert_eq!(call.argv, vec!["rt", "chat", "post", "build", "-"]);
+        assert_eq!(call.stdin.as_deref(), Some("-"));
+    }
+
+    #[test]
+    fn dm_routes_a_leading_dash_body_through_stdin() {
+        let r = FakeRunner::capture("");
+        dm(&r, "meg", "-rf everything").unwrap();
+        let call = r.last();
+        assert_eq!(call.argv, vec!["rt", "chat", "dm", "meg", "-"]);
+        assert_eq!(call.stdin.as_deref(), Some("-rf everything"));
+    }
+
+    #[test]
+    fn dm_routes_a_bare_dash_body_through_stdin() {
+        let r = FakeRunner::capture("");
+        dm(&r, "meg", "-").unwrap();
+        let call = r.last();
+        assert_eq!(call.argv, vec!["rt", "chat", "dm", "meg", "-"]);
+        assert_eq!(call.stdin.as_deref(), Some("-"));
     }
 
     #[test]

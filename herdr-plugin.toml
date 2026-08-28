@@ -27,6 +27,12 @@ contexts = ["workspace"]
 command = ["target/release/herdr-chat", "peek"]
 
 [[actions]]
+id = "quick-send"
+title = "Quick send"
+contexts = ["workspace"]
+command = ["target/release/herdr-chat", "quick-send"]
+
+[[actions]]
 id = "sign-in"
 title = "Sign in to chat"
 contexts = ["pane"]
@@ -57,6 +63,14 @@ placement = "popup"
 width = "70%"
 height = "60%"
 command = ["target/release/herdr-chat", "peek", "--pane"]
+
+[[panes]]
+id = "quick-send-ui"
+title = "Quick send"
+placement = "popup"
+width = "70%"
+height = "60%"
+command = ["target/release/herdr-chat", "quick-send", "--pane"]
 
 [[panes]]
 id = "signin-ask"
