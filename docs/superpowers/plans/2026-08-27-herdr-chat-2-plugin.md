@@ -134,7 +134,7 @@ mod tests {
 
 - [ ] **Step 4: Implement `viewer_url` and the real IO wrapper**
 
-`viewer_url` parses the deck JSON with serde, pulls `row.url`. Add a non-test `viewer_url_real()` that supplies the closures: the deck GET reads `api.json`'s port then `ureq::get(...).call()`, and the setting reads `rt settings get chat.viewerUrl` (or the settings resolver the estate uses; confirm the exact command). Keep `published`/`publicUrl` parsing available for a later shareable-URL path, but open-viewer uses `row.url`.
+`viewer_url` parses the deck JSON with serde, pulls `row.url`. Add a non-test `viewer_url_real()` that supplies the closures: the deck lookup runs `deck url chat` (part 3) first and, if that verb is absent or fails, reads `api.json`'s port then `ureq::get(...).call()` on `/api/v1/apps/chat`; the setting reads `rt settings get chat.viewerUrl` (confirm the exact settings command). Keep `published`/`publicUrl` parsing available for a later shareable-URL path, but open-viewer uses `row.url`.
 
 - [ ] **Step 5: Implement `open-viewer`**
 
