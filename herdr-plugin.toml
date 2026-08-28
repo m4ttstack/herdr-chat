@@ -56,24 +56,24 @@ command = ["sh", "-c", "exec ./target/release/herdr-chat on-agent-detected"]
 id = "broadcast-ui"
 title = "Broadcast"
 placement = "popup"
-width = "85%"
-height = "80%"
+width = 92
+height = 26
 command = ["sh", "-c", "exec ./target/release/herdr-chat broadcast --pane"]
 
 [[panes]]
 id = "peek-ui"
 title = "Chat peek"
 placement = "popup"
-width = "70%"
-height = "70%"
+width = 72
+height = 20
 command = ["sh", "-c", "exec ./target/release/herdr-chat peek --pane"]
 
 [[panes]]
 id = "quick-send-ui"
 title = "Quick send"
 placement = "popup"
-width = "70%"
-height = "70%"
+width = 72
+height = 18
 command = ["sh", "-c", "exec ./target/release/herdr-chat quick-send --pane"]
 
 [[panes]]

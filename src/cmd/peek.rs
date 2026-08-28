@@ -134,8 +134,8 @@ enum Action {
     None,
     /// Jump to the buddy with this handle.
     Jump(String),
-    /// Open this room in the web viewer.
-    OpenViewer(String),
+    /// Open the web viewer: a specific room, or the home page (`None`).
+    OpenViewer(Option<String>),
 }
 
 /// The workspace action: open the peek popup. A popup process carries no
@@ -164,7 +164,7 @@ pub fn run(r: &dyn Runner) -> Result<(), String> {
             }
             Ok(())
         }
-        Action::OpenViewer(room) => crate::cmd::open_viewer::run(r, Some(&room)),
+        Action::OpenViewer(room) => crate::cmd::open_viewer::run(r, room.as_deref()),
     }
 }
 
@@ -192,10 +192,11 @@ fn choose(theme: &AppTheme, launcher: &[Row]) -> std::io::Result<Action> {
                     }
                 }
                 KeyCode::Char('o') => {
-                    if let Some(room) = launcher.get(cursor).and_then(|r| r.room.clone()) {
-                        action = Action::OpenViewer(room);
-                        exit = true;
-                    }
+                    // Always open the viewer: the cursor's room if it is a room
+                    // row, otherwise the viewer home. On a buddy this pairs with
+                    // Enter (jump to their pane).
+                    action = Action::OpenViewer(launcher.get(cursor).and_then(|r| r.room.clone()));
+                    exit = true;
                 }
                 KeyCode::Esc | KeyCode::Char('q') => exit = true,
                 _ => {}
@@ -219,7 +220,7 @@ fn primary(row: &Row) -> Action {
             None => Action::None,
         },
         RowKind::Room => match &row.room {
-            Some(r) => Action::OpenViewer(r.clone()),
+            Some(r) => Action::OpenViewer(Some(r.clone())),
             None => Action::None,
         },
     }
