@@ -145,3 +145,7 @@ shapes, and the module map are in [AGENTS.md](AGENTS.md).
 Start with [AGENTS.md](AGENTS.md): it maps the modules, names the traps, and
 points at the design docs that own each decision. PRs run the repo-purity
 gate in CI; keep employer or customer references out of the tree.
+
+## License
+
+[MIT](LICENSE)
